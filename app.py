@@ -739,9 +739,9 @@ def _date_prefix():
 # 主界面
 # ──────────────────────────────────────────────
 def main():
-    st.markdown('<div class="main-title">POE文档生成器</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">微软客户POE文档生成器</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">从ctrl+c/ctrl+v工程师到AI工程师</div>',
+        '<div class="sub-title">🤖 拒绝 Ctrl+CV，摸鱼工程师的终极救星！一键生成让老板狂喜的文档！</div>',
         unsafe_allow_html=True,
     )
 
@@ -774,9 +774,9 @@ def main():
     st.markdown("### 客户信息")
     c1, c2 = st.columns([2, 1])
     with c1:
-        customer_name = st.text_input("客户名称", placeholder="例如：Contoso Ltd.")
+        customer_name = st.text_input("客户名称 (必填)", placeholder="例如：宇宙无敌科技有限公司")
     with c2:
-        budget = st.text_input("预估年消耗 (USD)", placeholder="例如：50k+")
+        budget = st.text_input("预估年消耗 (USD)", placeholder="越多越好，例如：500k+")
 
     customer_bg = st.text_area(
         "客户背景信息",
