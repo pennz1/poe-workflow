@@ -29,6 +29,8 @@
 - 文档风格与格式受 Word 模板约束，保持公司品牌一致性
 - 生成结果实时预览，支持一键下载
 
+![应用主界面](docs/images/main-page.png)
+
 ---
 
 ## 快速开始
@@ -84,6 +86,8 @@ AZURE_OPENAI_API_VERSION = "2024-06-01"   # 可选，默认即此版本
 
 ### ① AI 解决方案文档
 
+![AI 解决方案文档标签页](docs/images/main-page.png)
+
 **生成内容：** 完整的 Azure AI 售前解决方案架构文档（Word 格式）
 
 **操作步骤：**
@@ -103,6 +107,8 @@ AZURE_OPENAI_API_VERSION = "2024-06-01"   # 可选，默认即此版本
 ---
 
 ### ② POV 部署计划
+
+![POV 部署计划标签页](docs/images/pov-tab.png)
 
 **前提条件：** 必须先完成「AI 解决方案文档」的生成。
 
@@ -127,6 +133,8 @@ AZURE_OPENAI_API_VERSION = "2024-06-01"   # 可选，默认即此版本
 
 ### ③ 架构图 SVG
 
+![架构图 SVG 标签页](docs/images/svg-tab.png)
+
 **前提条件：** 必须先完成「AI 解决方案文档」的生成。
 
 **生成内容：** 企业级 Azure 解决方案逻辑架构图（SVG 矢量图）
@@ -144,6 +152,8 @@ AZURE_OPENAI_API_VERSION = "2024-06-01"   # 可选，默认即此版本
 ---
 
 ### ④ Azure Migrate CSV
+
+![Azure Migrate CSV 标签页](docs/images/csv-tab.png)
 
 **前提条件：** 必须先完成「AI 解决方案文档」的生成。
 
