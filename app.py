@@ -24,6 +24,7 @@ from docx.oxml.ns import qn
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(APP_DIR, "templates")
 SOLUTION_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "solution_template.docx.docx")
+INFRA_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "Infra_template.docx")
 POV_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "pov_template.docx.docx")
 MIGRATE_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "AzureMigrateimporttemplate.csv")
 
@@ -240,6 +241,58 @@ SOLUTION_SYSTEM_PROMPT = (
     "  - 预算紧张或仅需高并发基础交互：**例如：选择 GPT-4o-mini等其他模型**\n"
     "  - 必须写具体的模型名称（o1, o3-mini, GPT-4o, GPT-4o-mini），绝不能模糊地写 Azure OpenAI Service\n"
     "- **必须选择一个确定的 Azure 区域**，不要写 East Asia 或 Southeast Asia 这种二选一表述，根据客户的业务位置来决定\n"
+    "- 内容要精炼简洁，每个章节不超过模板文档的篇幅\n"
+    "- 表格必须使用 Markdown 表格语法\n\n"
+    "**重要：** 下方会提供一份【参考模板文档】，你必须严格学习它的写作风格（段落叙述，非列表）、内容篇幅和表格格式。以完全相同的结构和风格为新客户生成内容。"
+)
+
+INFRA_SYSTEM_PROMPT = (
+    "你是一位顶级的 Microsoft Azure 基础设施解决方案架构师。"
+    "请根据用户提供的【客户名称】、【背景信息】和【预估年消耗】，生成一份完整、专业的 Azure 基础设施解决方案架构文档。\n\n"
+    "**标题要求（极其重要）：** 你的输出的第一行必须是一个 `#` 标题，格式为: `# [客户名称] - [具体方案名称]`。"
+    "方案名称必须具体且针对客户业务，例如：\n"
+    "- `# 新疆云基智能科技 - 全球智能制造与可穿戴物联网云平台解决方案`\n"
+    "- `# 深圳跃瓦创新科技 - 混合云智慧工厂 IaaS 底座方案`\n"
+    "绝对不要使用笼统的'基础设施解决方案架构文档'作为标题。\n\n"
+    "**章节结构要求（必须严格遵循以下 10 个章节）：**\n\n"
+    "## 一、执行摘要\n"
+    "2-3 句话概述方案核心思路和预期价值。保持简洁。\n\n"
+    "## 二、解决方案架构概览\n"
+    "2-3 段话概述整体架构设计理念（如全球分布式接入、混合云底座等）。用段落叙述，不要用列表。\n\n"
+    "## 三、业务背景\n"
+    "用段落叙述客户的行业定位、痛点和机遇。可使用加粗关键词引导要点（如 **跨国网络延迟高:**、**数据合规风险:** 等）。\n\n"
+    "## 四、需求概述\n"
+    "分三类叙述：业务需求、功能需求、技术需求。每类 2-3 条核心需求，用段落叙述，不要用列表。\n\n"
+    "## 五、解决方案设计\n"
+    "概述部署策略（区域选择、网络架构等）。用加粗关键词引导每个设计要点，例如：\n"
+    "**统一网络出口:** 利用 Azure Front Door 提供全球应用入口...\n"
+    "**微服务计算中枢:** 部署 AKS 生产集群...\n"
+    "**高可用 IaaS 集群:** 使用 E 系列 VM 搭建高可用集群...\n\n"
+    "## 六、详细解决方案架构\n"
+    "针对每个核心 Azure 服务详细描述配置和用途。格式为：\n"
+    "**Azure IoT Hub:** 层级: Standard S2。用途: 承担每天千万条级别的设备通信...\n"
+    "**Azure Kubernetes Service (AKS):** 配置: Standard 规模集...用途: 运行所有应用层逻辑...\n"
+    "每个服务单独成段，包含配置规格和核心用途。\n\n"
+    "## 七、集成架构\n"
+    "用段落叙述消息流转、混合云互联、DevOps 集成等。每个要点用加粗关键词引导。\n\n"
+    "## 八、数据架构\n"
+    "按 热数据(Hot)/温数据(Warm)/冷数据(Cold) 分层描述数据存储策略。\n\n"
+    "## 九、安全架构\n"
+    "用段落叙述网络隔离、零信任访问、态势感知等安全设计。每个要点用加粗关键词引导。\n\n"
+    "## 十、基础设施需求\n"
+    "以 Markdown 表格形式列出所有 Azure 资源，表头必须为：`| 服务名称 | 配置规格 | 区域 | 核心用途 |`。\n"
+    "资源数量控制在 6-10 行，涵盖计算、存储、网络、数据库等核心组件。\n"
+    "示例：\n"
+    "| 服务名称 | 配置规格 | 区域 | 核心用途 |\n"
+    "| --- | --- | --- | --- |\n"
+    "| AKS | Standard + 6x D4s_v5 Node Pool | Southeast Asia | 弹性承载微服务、应用后端 |\n"
+    "| Virtual Machines | 4x E8s_v5 + P15 SSD | Southeast Asia | 支撑 ERP/MES/传统单体系统 |\n\n"
+    "**全局格式要求（极其重要）：**\n"
+    "- 章节标题使用 `## 一、执行摘要` 格式（## 开头 + 中文数字编号）\n"
+    "- **严格禁止使用项目符号列表（-、*、• 开头的行）。** 全文必须使用段落叙述\n"
+    "- **加粗关键词引导的要点必须每个单独成段（单独一行）**\n"
+    "- **严禁对专业术语缩写进行括号解释**\n"
+    "- **必须选择一个确定的 Azure 区域**，根据客户业务位置决定（如 Southeast Asia、East Asia 等）\n"
     "- 内容要精炼简洁，每个章节不超过模板文档的篇幅\n"
     "- 表格必须使用 Markdown 表格语法\n\n"
     "**重要：** 下方会提供一份【参考模板文档】，你必须严格学习它的写作风格（段落叙述，非列表）、内容篇幅和表格格式。以完全相同的结构和风格为新客户生成内容。"
@@ -731,6 +784,44 @@ def create_pov_docx(content: str, customer_name: str) -> bytes:
     return buffer.getvalue()
 
 
+def create_infra_docx(content: str, customer_name: str) -> bytes:
+    """
+    基于 Infra 模板生成基础设施解决方案 Word 文档。
+    布局: 封面标题（独占一页） → 目录（独占一页） → 正文
+    """
+    doc = _load_template(INFRA_TEMPLATE_PATH)
+    title = _extract_title(content, f"{customer_name} - 基础设施解决方案架构文档")
+    body_content = _strip_first_heading(content)
+
+    # ---- 第 1 页：封面标题 ----
+    for _ in range(8):
+        doc.add_paragraph()
+
+    cover = doc.add_paragraph()
+    cover.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = cover.add_run(title)
+    # 与 AI 解决方案一致: 18pt #4874CB
+    _set_run_font(run, font_name=CN_FONT_ALT, size_pt=18,
+                   bold=True, color_rgb=RGBColor(0x48, 0x74, 0xCB))
+
+    # 封面分页
+    _add_page_break(doc)
+
+    # ---- 第 2 页：目录 ----
+    _add_toc(doc)
+
+    # 目录分页
+    _add_page_break(doc)
+
+    # ---- 第 3 页起：正文内容（已去掉第一个 # 标题） ----
+    _markdown_to_docx(doc, body_content, body_size=9)
+
+    # 导出
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
 # ──────────────────────────────────────────────
 # 辅助：日期前缀文件名
 # ──────────────────────────────────────────────
@@ -756,20 +847,23 @@ def main():
     with st.sidebar:
         st.markdown("### 操作")
         if st.button("清除所有结果", use_container_width=True):
-            for key in ["solution_text", "pov_text", "customer_name", "svg_code", "csv_code", "budget"]:
+            for key in ["solution_text", "infra_text", "pov_text", "customer_name", "svg_code", "csv_code", "budget", "doc_type"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
         st.markdown("---")
         st.markdown("### 模板状态")
         sol_ok = os.path.exists(SOLUTION_TEMPLATE_PATH)
+        infra_ok = os.path.exists(INFRA_TEMPLATE_PATH)
         pov_ok = os.path.exists(POV_TEMPLATE_PATH)
         csv_ok = os.path.exists(MIGRATE_TEMPLATE_PATH)
-        st.markdown(f"- Solution: {'OK' if sol_ok else 'Missing'}")
+        st.markdown(f"- AI Solution: {'OK' if sol_ok else 'Missing'}")
+        st.markdown(f"- Infra: {'OK' if infra_ok else 'Missing'}")
         st.markdown(f"- POV: {'OK' if pov_ok else 'Missing'}")
         st.markdown(f"- CSV: {'OK' if csv_ok else 'Missing'}")
 
     solution_ref = extract_template_text(SOLUTION_TEMPLATE_PATH) if sol_ok else ""
+    infra_ref = extract_template_text(INFRA_TEMPLATE_PATH) if infra_ok else ""
     pov_ref = extract_template_text(POV_TEMPLATE_PATH) if pov_ok else ""
 
     # ════════════════════════════════════════════════════
@@ -794,75 +888,146 @@ def main():
     # Tab 布局
     # ════════════════════════════════════════════════════
     tab_sol, tab_pov, tab_svg, tab_csv = st.tabs([
-        "AI 解决方案文档", "POV 部署计划", "架构图 (SVG)", "Azure Migrate CSV"
+        "解决方案文档", "POV 部署计划", "架构图 (SVG)", "Azure Migrate CSV"
     ])
 
     dp = _date_prefix()  # 日期前缀
 
     # ─────────── Tab 1: 解决方案文档 ───────────
     with tab_sol:
+        # 文档类型切换
+        doc_type = st.radio(
+            "选择文档类型",
+            ["AI 解决方案", "Infra 基础设施"],
+            horizontal=True,
+            key="doc_type_radio",
+            index=0 if st.session_state.get("doc_type", "AI") == "AI" else 1,
+        )
+        current_doc_type = "AI" if doc_type == "AI 解决方案" else "Infra"
+        st.session_state["doc_type"] = current_doc_type
+
         left, right = st.columns([1, 1])
         with left:
-            has_solution = "solution_text" in st.session_state
-            sol_label = "重新生成" if has_solution else "生成解决方案架构文档"
-            if st.button(sol_label, type="primary", use_container_width=True, key="btn_sol"):
-                if not customer_name.strip():
-                    st.warning("请输入客户名称。")
-                    st.stop()
-                if not customer_bg.strip():
-                    st.warning("请输入客户背景信息。")
-                    st.stop()
-                try:
-                    with st.spinner("正在生成解决方案架构文档..."):
-                        user_ctx = (
-                            f"## 客户信息\n- **客户名称**：{customer_name}\n"
-                            f"- **预估年消耗 (USD)**：{budget}\n\n"
-                            f"## 客户背景\n{customer_bg}"
-                        )
-                        if solution_ref:
-                            user_ctx += (
-                                f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
-                                f"{solution_ref}"
+            if current_doc_type == "AI":
+                # AI 解决方案文档逻辑
+                has_solution = "solution_text" in st.session_state
+                sol_label = "重新生成" if has_solution else "生成 AI 解决方案架构文档"
+                if st.button(sol_label, type="primary", use_container_width=True, key="btn_sol"):
+                    if not customer_name.strip():
+                        st.warning("请输入客户名称。")
+                        st.stop()
+                    if not customer_bg.strip():
+                        st.warning("请输入客户背景信息。")
+                        st.stop()
+                    try:
+                        with st.spinner("正在生成 AI 解决方案架构文档..."):
+                            user_ctx = (
+                                f"## 客户信息\n- **客户名称**：{customer_name}\n"
+                                f"- **预估年消耗 (USD)**：{budget}\n\n"
+                                f"## 客户背景\n{customer_bg}"
                             )
-                        sol_text = call_azure_openai(SOLUTION_SYSTEM_PROMPT, user_ctx)
-                        st.session_state["solution_text"] = sol_text
-                        st.session_state["customer_name"] = customer_name
-                        st.session_state["budget"] = budget
-                        st.session_state.pop("pov_text", None)
-                        st.session_state.pop("svg_code", None)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"生成失败：{e}")
+                            if solution_ref:
+                                user_ctx += (
+                                    f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+                                    f"{solution_ref}"
+                                )
+                            sol_text = call_azure_openai(SOLUTION_SYSTEM_PROMPT, user_ctx)
+                            st.session_state["solution_text"] = sol_text
+                            st.session_state["customer_name"] = customer_name
+                            st.session_state["budget"] = budget
+                            st.session_state.pop("pov_text", None)
+                            st.session_state.pop("svg_code", None)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"生成失败：{e}")
 
-            if "solution_text" in st.session_state:
-                customer = st.session_state["customer_name"]
-                docx_sol = create_solution_docx(
-                    content=st.session_state["solution_text"], customer_name=customer
-                )
-                st.download_button(
-                    label="下载解决方案架构文档 (.docx)",
-                    data=docx_sol,
-                    file_name=f"{dp}-{customer}-AI解决方案架构文档.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
+                if "solution_text" in st.session_state:
+                    customer = st.session_state["customer_name"]
+                    docx_sol = create_solution_docx(
+                        content=st.session_state["solution_text"], customer_name=customer
+                    )
+                    st.download_button(
+                        label="下载 AI 解决方案架构文档 (.docx)",
+                        data=docx_sol,
+                        file_name=f"{dp}-{customer}-AI解决方案架构文档.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+            else:
+                # Infra 基础设施文档逻辑
+                has_infra = "infra_text" in st.session_state
+                infra_label = "重新生成" if has_infra else "生成 Infra 基础设施架构文档"
+                if st.button(infra_label, type="primary", use_container_width=True, key="btn_infra"):
+                    if not customer_name.strip():
+                        st.warning("请输入客户名称。")
+                        st.stop()
+                    if not customer_bg.strip():
+                        st.warning("请输入客户背景信息。")
+                        st.stop()
+                    try:
+                        with st.spinner("正在生成 Infra 基础设施架构文档..."):
+                            user_ctx = (
+                                f"## 客户信息\n- **客户名称**：{customer_name}\n"
+                                f"- **预估年消耗 (USD)**：{budget}\n\n"
+                                f"## 客户背景\n{customer_bg}"
+                            )
+                            if infra_ref:
+                                user_ctx += (
+                                    f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+                                    f"{infra_ref}"
+                                )
+                            infra_text = call_azure_openai(INFRA_SYSTEM_PROMPT, user_ctx)
+                            st.session_state["infra_text"] = infra_text
+                            st.session_state["customer_name"] = customer_name
+                            st.session_state["budget"] = budget
+                            st.session_state.pop("pov_text", None)
+                            st.session_state.pop("svg_code", None)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"生成失败：{e}")
+
+                if "infra_text" in st.session_state:
+                    customer = st.session_state["customer_name"]
+                    docx_infra = create_infra_docx(
+                        content=st.session_state["infra_text"], customer_name=customer
+                    )
+                    st.download_button(
+                        label="下载 Infra 基础设施架构文档 (.docx)",
+                        data=docx_infra,
+                        file_name=f"{dp}-{customer}-Infra基础设施架构文档.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
 
         with right:
-            if "solution_text" in st.session_state:
-                st.markdown("**文档预览**")
-                st.markdown(st.session_state["solution_text"], unsafe_allow_html=True)
+            if current_doc_type == "AI":
+                if "solution_text" in st.session_state:
+                    st.markdown("**AI 解决方案文档预览**")
+                    st.markdown(st.session_state["solution_text"], unsafe_allow_html=True)
+                else:
+                    st.info("请先生成 AI 解决方案文档")
             else:
-                st.info("请先生成解决方案文档")
+                if "infra_text" in st.session_state:
+                    st.markdown("**Infra 基础设施文档预览**")
+                    st.markdown(st.session_state["infra_text"], unsafe_allow_html=True)
+                else:
+                    st.info("请先生成 Infra 基础设施文档")
 
     # ─────────── Tab 2: POV 部署计划 ───────────
     with tab_pov:
-        if "solution_text" not in st.session_state:
-            st.info("请先在「AI 解决方案文档」标签页中生成解决方案文档")
+        # 根据当前文档类型确定使用哪个解决方案文档
+        current_doc_type = st.session_state.get("doc_type", "AI")
+        has_base_doc = ("solution_text" in st.session_state) if current_doc_type == "AI" else ("infra_text" in st.session_state)
+        
+        if not has_base_doc:
+            doc_type_name = "AI 解决方案" if current_doc_type == "AI" else "Infra 基础设施"
+            st.info(f"请先在「解决方案文档」标签页中生成 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
-            solution = st.session_state["solution_text"]
+            solution = st.session_state["solution_text"] if current_doc_type == "AI" else st.session_state["infra_text"]
             left, right = st.columns([1, 1])
             with left:
+                st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
                 dc1, dc2 = st.columns(2)
                 with dc1:
                     pov_start = st.date_input("POV 开始日期", value=datetime.date.today())
@@ -928,11 +1093,17 @@ def main():
 
     # ─────────── Tab 3: SVG 架构图 ───────────
     with tab_svg:
-        if "solution_text" not in st.session_state:
-            st.info("请先在「AI 解决方案文档」标签页中生成解决方案文档")
+        current_doc_type = st.session_state.get("doc_type", "AI")
+        has_base_doc = ("solution_text" in st.session_state) if current_doc_type == "AI" else ("infra_text" in st.session_state)
+        
+        if not has_base_doc:
+            doc_type_name = "AI 解决方案" if current_doc_type == "AI" else "Infra 基础设施"
+            st.info(f"请先在「解决方案文档」标签页中生成 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
-            solution = st.session_state["solution_text"]
+            solution = st.session_state["solution_text"] if current_doc_type == "AI" else st.session_state["infra_text"]
+            
+            st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
 
             has_svg = "svg_code" in st.session_state
             svg_label = "重新生成架构图" if has_svg else "生成 SVG 架构图"
@@ -999,13 +1170,18 @@ def main():
 
     # ─────────── Tab 4: Azure Migrate CSV ───────────
     with tab_csv:
-        if "solution_text" not in st.session_state:
-            st.info("请先在「AI 解决方案文档」标签页中生成解决方案文档")
+        current_doc_type = st.session_state.get("doc_type", "AI")
+        has_base_doc = ("solution_text" in st.session_state) if current_doc_type == "AI" else ("infra_text" in st.session_state)
+        
+        if not has_base_doc:
+            doc_type_name = "AI 解决方案" if current_doc_type == "AI" else "Infra 基础设施"
+            st.info(f"请先在「解决方案文档」标签页中生成 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
             bdgt = st.session_state.get("budget", budget)
             left, right = st.columns([1, 1])
             with left:
+                st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
                 migrate_csv_header = ""
                 if os.path.exists(MIGRATE_TEMPLATE_PATH):
                     with open(MIGRATE_TEMPLATE_PATH, "r", encoding="utf-8-sig") as f:
