@@ -1,0 +1,11 @@
+# Secrets - 绝对不推送到 GitHub
+.streamlit/secrets.toml
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
