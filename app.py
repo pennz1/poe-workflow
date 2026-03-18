@@ -1033,18 +1033,18 @@ def main():
                 st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
                 dc1, dc2 = st.columns(2)
                 with dc1:
-                    pov_start = st.date_input("POV 开始日期", value=datetime.date.today())
+                    pov_start = st.date_input("POV 开始日期", value=None)
                 with dc2:
                     pov_end = st.date_input(
                         "POV 结束日期",
-                        value=datetime.date.today() + datetime.timedelta(days=14),
+                        value=None,
                     )
 
                 vendor_team = st.text_area(
                     "乙方项目人员（我方团队）",
                     value=(
-                        "技术负责人: 吕兴安\n"
-                        "Azure架构师: alex\n"
+                        "技术负责人: \n"
+                        "Azure架构师: \n"
                     ),
                     height=120,
                     help="只需填写乙方（我方）人员，甲方人员由 AI 根据客户背景自动生成",
@@ -1053,6 +1053,9 @@ def main():
                 has_pov = "pov_text" in st.session_state
                 pov_label = "重新生成" if has_pov else "生成 POV 部署计划"
                 if st.button(pov_label, type="primary", use_container_width=True, key="btn_pov"):
+                    if not pov_start or not pov_end:
+                        st.warning("请先选择 POV 开始日期和结束日期。")
+                        st.stop()
                     try:
                         pov_period = f"{pov_start.strftime('%Y/%m/%d')} - {pov_end.strftime('%Y/%m/%d')}"
                         pov_prompt = (
