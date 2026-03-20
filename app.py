@@ -911,96 +911,152 @@ def main():
         current_doc_type = "AI" if doc_type == "AI 解决方案" else "Infra"
         st.session_state["doc_type"] = current_doc_type
 
+        # 文档来源切换
+        doc_source = st.radio(
+            "文档来源",
+            ["AI 生成", "手动导入"],
+            horizontal=True,
+            key="doc_source_radio",
+        )
+
         left, right = st.columns([1, 1])
         with left:
-            if current_doc_type == "AI":
-                # AI 解决方案文档逻辑
-                has_solution = "solution_text" in st.session_state
-                sol_label = "重新生成" if has_solution else "生成 AI 解决方案架构文档"
-                if st.button(sol_label, type="primary", use_container_width=True, key="btn_sol"):
+            if doc_source == "手动导入":
+                # ── 手动导入已有文档 ──
+                uploaded_doc = st.file_uploader(
+                    "上传已有的 .docx 文档",
+                    type=["docx"],
+                    key="upload_existing_doc",
+                    help="上传后将自动提取文档文本内容",
+                )
+                manual_text = st.text_area(
+                    "或直接粘贴文本内容",
+                    height=200,
+                    key="manual_doc_text",
+                    placeholder="将已有的解决方案文档内容粘贴到此处...",
+                )
+
+                if st.button("确认导入", type="primary", use_container_width=True, key="btn_import"):
                     if not customer_name.strip():
                         st.warning("请输入客户名称。")
                         st.stop()
-                    if not customer_bg.strip():
-                        st.warning("请输入客户背景信息。")
-                        st.stop()
-                    try:
-                        with st.spinner("正在生成 AI 解决方案架构文档..."):
-                            user_ctx = (
-                                f"## 客户信息\n- **客户名称**：{customer_name}\n\n"
-                                f"## 客户背景\n{customer_bg}"
-                            )
-                            if solution_ref:
-                                user_ctx += (
-                                    f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
-                                    f"{solution_ref}"
-                                )
-                            sol_text = call_azure_openai(SOLUTION_SYSTEM_PROMPT, user_ctx)
-                            st.session_state["solution_text"] = sol_text
-                            st.session_state["customer_name"] = customer_name
-                            st.session_state["budget"] = budget
-                            st.session_state.pop("pov_text", None)
-                            st.session_state.pop("svg_code", None)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"生成失败：{e}")
 
-                if "solution_text" in st.session_state:
-                    customer = st.session_state["customer_name"]
-                    docx_sol = create_solution_docx(
-                        content=st.session_state["solution_text"], customer_name=customer
-                    )
-                    st.download_button(
-                        label="下载 AI 解决方案架构文档 (.docx)",
-                        data=docx_sol,
-                        file_name=f"{dp}-{customer}-AI解决方案架构文档.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                    )
+                    imported_text = ""
+                    if uploaded_doc is not None:
+                        # 从 .docx 提取全文
+                        doc = Document(uploaded_doc)
+                        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                        # 同时提取表格内容
+                        for table in doc.tables:
+                            for row in table.rows:
+                                cells = [cell.text.strip() for cell in row.cells]
+                                paragraphs.append(" | ".join(cells))
+                        imported_text = "\n\n".join(paragraphs)
+                    elif manual_text.strip():
+                        imported_text = manual_text.strip()
+                    else:
+                        st.warning("请上传文档或粘贴文本。")
+                        st.stop()
+
+                    # 存入 session_state
+                    target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
+                    st.session_state[target_key] = imported_text
+                    st.session_state["customer_name"] = customer_name
+                    st.session_state["budget"] = budget
+                    st.session_state.pop("pov_text", None)
+                    st.session_state.pop("svg_code", None)
+                    st.rerun()
+
             else:
-                # Infra 基础设施文档逻辑
-                has_infra = "infra_text" in st.session_state
-                infra_label = "重新生成" if has_infra else "生成 Infra 基础设施架构文档"
-                if st.button(infra_label, type="primary", use_container_width=True, key="btn_infra"):
-                    if not customer_name.strip():
-                        st.warning("请输入客户名称。")
-                        st.stop()
-                    if not customer_bg.strip():
-                        st.warning("请输入客户背景信息。")
-                        st.stop()
-                    try:
-                        with st.spinner("正在生成 Infra 基础设施架构文档..."):
-                            user_ctx = (
-                                f"## 客户信息\n- **客户名称**：{customer_name}\n\n"
-                                f"## 客户背景\n{customer_bg}"
-                            )
-                            if infra_ref:
-                                user_ctx += (
-                                    f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
-                                    f"{infra_ref}"
+                # ── AI 生成文档 ──
+                if current_doc_type == "AI":
+                    # AI 解决方案文档逻辑
+                    has_solution = "solution_text" in st.session_state
+                    sol_label = "重新生成" if has_solution else "生成 AI 解决方案架构文档"
+                    if st.button(sol_label, type="primary", use_container_width=True, key="btn_sol"):
+                        if not customer_name.strip():
+                            st.warning("请输入客户名称。")
+                            st.stop()
+                        if not customer_bg.strip():
+                            st.warning("请输入客户背景信息。")
+                            st.stop()
+                        try:
+                            with st.spinner("正在生成 AI 解决方案架构文档..."):
+                                user_ctx = (
+                                    f"## 客户信息\n- **客户名称**：{customer_name}\n\n"
+                                    f"## 客户背景\n{customer_bg}"
                                 )
-                            infra_text = call_azure_openai(INFRA_SYSTEM_PROMPT, user_ctx)
-                            st.session_state["infra_text"] = infra_text
-                            st.session_state["customer_name"] = customer_name
-                            st.session_state["budget"] = budget
-                            st.session_state.pop("pov_text", None)
-                            st.session_state.pop("svg_code", None)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"生成失败：{e}")
+                                if solution_ref:
+                                    user_ctx += (
+                                        f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+                                        f"{solution_ref}"
+                                    )
+                                sol_text = call_azure_openai(SOLUTION_SYSTEM_PROMPT, user_ctx)
+                                st.session_state["solution_text"] = sol_text
+                                st.session_state["customer_name"] = customer_name
+                                st.session_state["budget"] = budget
+                                st.session_state.pop("pov_text", None)
+                                st.session_state.pop("svg_code", None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"生成失败：{e}")
 
-                if "infra_text" in st.session_state:
-                    customer = st.session_state["customer_name"]
-                    docx_infra = create_infra_docx(
-                        content=st.session_state["infra_text"], customer_name=customer
-                    )
-                    st.download_button(
-                        label="下载 Infra 基础设施架构文档 (.docx)",
-                        data=docx_infra,
-                        file_name=f"{dp}-{customer}-Infra基础设施架构文档.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                    )
+                    if "solution_text" in st.session_state:
+                        customer = st.session_state["customer_name"]
+                        docx_sol = create_solution_docx(
+                            content=st.session_state["solution_text"], customer_name=customer
+                        )
+                        st.download_button(
+                            label="下载 AI 解决方案架构文档 (.docx)",
+                            data=docx_sol,
+                            file_name=f"{dp}-{customer}-AI解决方案架构文档.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                        )
+                else:
+                    # Infra 基础设施文档逻辑
+                    has_infra = "infra_text" in st.session_state
+                    infra_label = "重新生成" if has_infra else "生成 Infra 基础设施架构文档"
+                    if st.button(infra_label, type="primary", use_container_width=True, key="btn_infra"):
+                        if not customer_name.strip():
+                            st.warning("请输入客户名称。")
+                            st.stop()
+                        if not customer_bg.strip():
+                            st.warning("请输入客户背景信息。")
+                            st.stop()
+                        try:
+                            with st.spinner("正在生成 Infra 基础设施架构文档..."):
+                                user_ctx = (
+                                    f"## 客户信息\n- **客户名称**：{customer_name}\n\n"
+                                    f"## 客户背景\n{customer_bg}"
+                                )
+                                if infra_ref:
+                                    user_ctx += (
+                                        f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+                                        f"{infra_ref}"
+                                    )
+                                infra_text = call_azure_openai(INFRA_SYSTEM_PROMPT, user_ctx)
+                                st.session_state["infra_text"] = infra_text
+                                st.session_state["customer_name"] = customer_name
+                                st.session_state["budget"] = budget
+                                st.session_state.pop("pov_text", None)
+                                st.session_state.pop("svg_code", None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"生成失败：{e}")
+
+                    if "infra_text" in st.session_state:
+                        customer = st.session_state["customer_name"]
+                        docx_infra = create_infra_docx(
+                            content=st.session_state["infra_text"], customer_name=customer
+                        )
+                        st.download_button(
+                            label="下载 Infra 基础设施架构文档 (.docx)",
+                            data=docx_infra,
+                            file_name=f"{dp}-{customer}-Infra基础设施架构文档.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                        )
 
         with right:
             if current_doc_type == "AI":
@@ -1008,13 +1064,13 @@ def main():
                     st.markdown("**AI 解决方案文档预览**")
                     st.markdown(st.session_state["solution_text"], unsafe_allow_html=True)
                 else:
-                    st.info("请先生成 AI 解决方案文档")
+                    st.info("请先生成或导入 AI 解决方案文档")
             else:
                 if "infra_text" in st.session_state:
                     st.markdown("**Infra 基础设施文档预览**")
                     st.markdown(st.session_state["infra_text"], unsafe_allow_html=True)
                 else:
-                    st.info("请先生成 Infra 基础设施文档")
+                    st.info("请先生成或导入 Infra 基础设施文档")
 
     # ─────────── Tab 2: POV 部署计划 ───────────
     with tab_pov:
@@ -1024,7 +1080,7 @@ def main():
         
         if not has_base_doc:
             doc_type_name = "AI 解决方案" if current_doc_type == "AI" else "Infra 基础设施"
-            st.info(f"请先在「解决方案文档」标签页中生成 {doc_type_name} 文档")
+            st.info(f"请先在「解决方案文档」标签页中生成或导入 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
             solution = st.session_state["solution_text"] if current_doc_type == "AI" else st.session_state["infra_text"]
@@ -1104,7 +1160,7 @@ def main():
         
         if not has_base_doc:
             doc_type_name = "AI 解决方案" if current_doc_type == "AI" else "Infra 基础设施"
-            st.info(f"请先在「解决方案文档」标签页中生成 {doc_type_name} 文档")
+            st.info(f"请先在「解决方案文档」标签页中生成或导入 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
             solution = st.session_state["solution_text"] if current_doc_type == "AI" else st.session_state["infra_text"]
@@ -1181,7 +1237,7 @@ def main():
         
         if not has_base_doc:
             doc_type_name = "AI 解决方案" if current_doc_type == "AI" else "Infra 基础设施"
-            st.info(f"请先在「解决方案文档」标签页中生成 {doc_type_name} 文档")
+            st.info(f"请先在「解决方案文档」标签页中生成或导入 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
             bdgt = st.session_state.get("budget", budget)
