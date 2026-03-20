@@ -937,10 +937,6 @@ def main():
                 )
 
                 if st.button("确认导入", type="primary", use_container_width=True, key="btn_import"):
-                    if not customer_name.strip():
-                        st.warning("请输入客户名称。")
-                        st.stop()
-
                     imported_text = ""
                     if uploaded_doc is not None:
                         # 从 .docx 提取全文
@@ -961,7 +957,7 @@ def main():
                     # 存入 session_state
                     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
                     st.session_state[target_key] = imported_text
-                    st.session_state["customer_name"] = customer_name
+                    st.session_state["customer_name"] = customer_name.strip() if customer_name.strip() else "未命名客户"
                     st.session_state["budget"] = budget
                     st.session_state.pop("pov_text", None)
                     st.session_state.pop("svg_code", None)
