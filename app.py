@@ -1110,11 +1110,31 @@ def main():
                         st.stop()
                     try:
                         pov_period = f"{pov_start.strftime('%Y/%m/%d')} - {pov_end.strftime('%Y/%m/%d')}"
+
+                        # ── 预计算工作日与周末 ──
+                        all_days = []
+                        workdays = []
+                        weekends = []
+                        d = pov_start
+                        while d <= pov_end:
+                            if d.weekday() < 5:  # 0=Mon .. 4=Fri
+                                workdays.append(f"{d.month}月{d.day}日")
+                            else:
+                                weekends.append(f"{d.month}月{d.day}日")
+                            d += datetime.timedelta(days=1)
+
+                        workday_list_str = "、".join(workdays)
+                        weekend_list_str = "、".join(weekends) if weekends else "无"
+
                         pov_prompt = (
                             f"以下是已生成的解决方案架构文档，请据此生成 POV 部署计划：\n\n"
                             f"{solution}\n\n"
                             f"## 补充信息\n- **客户名称**：{customer}\n"
                             f"- **POV 周期**：{pov_period}\n\n"
+                            f"## 可用工作日清单（共 {len(workdays)} 天，必须且只能使用这些日期）\n"
+                            f"{workday_list_str}\n\n"
+                            f"## 禁用日期（周末，严禁安排任何任务）\n"
+                            f"{weekend_list_str}\n\n"
                             f"## 乙方项目人员\n{vendor_team}\n\n"
                             f"请根据客户背景信息自动生成合理的甲方人员（2-3人，包含项目负责人和技术对接人）。"
                         )
