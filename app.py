@@ -52,10 +52,8 @@ st.markdown(
     html, body, [class*="st-"] { font-family: 'Inter', sans-serif; }
 
     .main-title {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.4rem;
+        color: #1F4E79;
+        font-size: 2.2rem;
         font-weight: 700;
         text-align: center;
         padding: 0.5rem 0 0.2rem 0;
@@ -67,13 +65,13 @@ st.markdown(
         margin-bottom: 1.5rem;
     }
     div[data-testid="stForm"] {
-        border: 1px solid rgba(102, 126, 234, 0.25);
-        border-radius: 16px;
+        border: 1px solid #E0E0E0;
+        border-radius: 12px;
         padding: 1.5rem;
-        background: linear-gradient(145deg, rgba(102,126,234,0.04), rgba(118,75,162,0.04));
+        background-color: #F8F9FA;
     }
     .stFormSubmitButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        background-color: #1F4E79 !important;
         color: white !important;
         border: none !important;
         border-radius: 10px !important;
@@ -341,71 +339,8 @@ POV_SYSTEM_PROMPT = (
 )
 
 # -----------------------------------------------------------------
-# Prompt 模板：SVG 现代化架构图生成器
+# (SVG 架构图功能已移除)
 # -----------------------------------------------------------------
-
-SVG_SYSTEM_PROMPT = (
-    "你是一位顶尖的云计算架构师和资深 UI/UX 视觉设计师，精通编写直接可渲染的、具有极高现代审美的 SVG 代码。\n"
-    "请根据我提供的【架构描述】和【组件列表】，为我绘制一份企业级的 Azure 解决方案逻辑架构图。\n\n"
-    "你的输出必须且只能是一段完整的 <svg> 代码，画布大小设置为 <svg width=\"1350\" height=\"900\" ...>。\n\n"
-    "**【强制性视觉与排版规范（极度重要，违反将导致渲染失败！）】**：\n\n"
-    "1. **绝对网格布局系统 (Strict Grid System - 防重叠核心规则)**：\n"
-    "   你必须在脑海中建立一个严格的网格来放置组件，**绝对禁止任何两个卡片重叠或覆盖！**\n"
-    "   - 标准卡片尺寸强制为：`width=\"240\"`，`height=\"80\"`。\n"
-    "   - **X 轴 (列) 固定锚点：** \n"
-    "     列 1 (接入层) X = 80\n"
-    "     列 2 (网关层) X = 380\n"
-    "     列 3 (AI/核心层) X = 680\n"
-    "     列 4 (数据层) X = 980\n"
-    "   - **Y 轴 (行) 固定步长：** \n"
-    "     每个卡片高度 80，垂直间距必须至少为 40。因此 Y 轴步长必须是 120！\n"
-    "     行 1 Y = 160\n"
-    "     行 2 Y = 280\n"
-    "     行 3 Y = 400\n"
-    "     行 4 Y = 520\n"
-    "     行 5 Y = 640\n"
-    "     行 6 Y = 760\n"
-    "   - **坐标分配警告：** 在同一个列中，每放置一个新组件，其 `translate(x, y)` 中的 `y` 值必须比上一个组件增加至少 `120`。严禁将两个组件放在如 `y=280` 和 `y=300` 这样接近的位置！\n\n"
-    "2. **图层 Z-Index 隔离策略 (绝对强制)**：\n"
-    "   你的 SVG 结构必须严格按照以下顺序编写，以防连线遮挡文字：\n"
-    '   - 第 1 层：全局背景 <rect width="100%" height="100%" fill="url(#bgGradient)" />\n'
-    "   - 第 2 层：区域划分大背景框 (Zone Backgrounds)\n"
-    '   - 第 3 层：所有连线 <g id="connectors"> ... </g> (连线必须在组件之前绘制！)\n'
-    '   - 第 4 层：所有服务卡片 <g id="components"> ... </g> (卡片必须有 fill="#FFF"，这样连线误差会被白色卡片背景完美遮挡)\n\n'
-    "3. **SVG 定义 (Defs)**：必须在 SVG 开头包含以下 <defs>：\n"
-    '<defs>\n'
-    '  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">\n'
-    '    <feGaussianBlur in="SourceAlpha" stdDeviation="4"/>\n'
-    '    <feOffset dx="2" dy="4" result="offsetblur"/>\n'
-    '    <feComponentTransfer><feFuncA type="linear" slope="0.15"/></feComponentTransfer>\n'
-    '    <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>\n'
-    '  </filter>\n'
-    '  <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%">\n'
-    '    <stop offset="0%" style="stop-color:#F4F7FB;stop-opacity:1" />\n'
-    '    <stop offset="100%" style="stop-color:#FFFFFF;stop-opacity:1" />\n'
-    '  </linearGradient>\n'
-    '  <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">\n'
-    '    <path d="M0,0 L0,6 L9,3 z" fill="#0078D4" />\n'
-    '  </marker>\n'
-    '</defs>\n\n'
-    "4. **连线与路由规范 (Orthogonal Routing)**：\n"
-    "   - 严禁乱穿交叉！严禁一笔画斜线！\n"
-    '   - 必须使用正交折线，格式为 <path d="M x1 y1 L x2 y1 L x2 y2 L x3 y2" fill="none" stroke="#0078D4" stroke-width="2" marker-end="url(#arrow)"/>\n'
-    "   - 连线起点：`x + width` (例如 80+240=320)；连线终点：目标卡片的 `x` (例如 380)。\n\n"
-    "5. **卡片内容规范**：\n"
-    '   - 必须使用 <g transform="translate(x, y)"> 组合服务。\n'
-    "   - 示例如下：\n"
-    '   <g transform="translate(680, 280)"> <!-- 注意 Y 值的网格化 -->\n'
-    '     <rect width="240" height="80" rx="8" fill="#FFF" stroke="#5C2D91" stroke-width="2" filter="url(#shadow)"/>\n'
-    '     <text x="120" y="35" font-family="\'Segoe UI\', sans-serif" font-size="15" fill="#333" font-weight="bold" text-anchor="middle">Azure OpenAI</text>\n'
-    '     <text x="120" y="55" font-family="\'Segoe UI\', sans-serif" font-size="12" fill="#666" text-anchor="middle">GPT-4o-mini (主力引擎)</text>\n'
-    '   </g>\n\n'
-    "6. **Azure 品牌配色参考**：AI服务(紫色 #5C2D91), 网关/基础计算(蓝色 #0078D4), 数据/存储(青色 #008272), 安全(红色 #D13438)。\n\n"
-    "**【输出要求】**：\n"
-    "开始编写前，请在脑海中严格为每个组件分配 (列X, 行Y) 的坐标，确保同一个列中的 Y 坐标以 120 的倍数递增（160, 280, 400...）。\n"
-    "直接输出完整的 XML/SVG 代码，禁止输出任何解释性文字。\n"
-    'SVG 标签中务必包含 xmlns="http://www.w3.org/2000/svg"。确保闭合所有标签。'
-)
 
 CSV_SYSTEM_PROMPT = (
     "你是一位 Azure 迁移专家。用户会提供一份 Azure 价格估算表（包含资源名称、SKU、估算金额等）和一份 Azure Migrate 导入 CSV 模板。\n\n"
@@ -839,9 +774,9 @@ def _date_prefix():
 # 主界面
 # ──────────────────────────────────────────────
 def main():
-    st.markdown('<div class="main-title">微软客户POE文档生成器</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">微软客户 POE 文档生成器</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">🤖 拒绝 Ctrl+CV，摸鱼工程师的终极救星！一键生成让老板狂喜的文档！</div>',
+        '<div class="sub-title">专注、高效、专业的文档自动化工作流解决方案。</div>',
         unsafe_allow_html=True,
     )
 
@@ -852,7 +787,7 @@ def main():
     with st.sidebar:
         st.markdown("### 操作")
         if st.button("清除所有结果", use_container_width=True):
-            for key in ["solution_text", "infra_text", "pov_text", "customer_name", "svg_code", "csv_code", "budget", "doc_type"]:
+            for key in ["solution_text", "infra_text", "pov_text", "customer_name", "csv_code", "budget", "doc_type", "yearly_excel_bytes", "yearly_excel_name", "yearly_messages"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -892,8 +827,8 @@ def main():
     # ════════════════════════════════════════════════════
     # Tab 布局
     # ════════════════════════════════════════════════════
-    tab_sol, tab_pov, tab_svg, tab_csv, tab_yearly = st.tabs([
-        "解决方案文档", "POV 部署计划", "架构图 (SVG)", "Azure Migrate CSV", "年度价格表"
+    tab_sol, tab_pov, tab_csv, tab_yearly = st.tabs([
+        "解决方案文档", "POV 部署计划", "Azure Migrate CSV", "年度价格表"
     ])
 
     dp = _date_prefix()  # 日期前缀
@@ -1169,8 +1104,8 @@ def main():
                 else:
                     st.info("请填写信息后点击生成")
 
-    # ─────────── Tab 3: SVG 架构图 ───────────
-    with tab_svg:
+    # ─────────── Tab 3: Azure Migrate CSV ───────────
+    with tab_csv:
         current_doc_type = st.session_state.get("doc_type", "AI")
         has_base_doc = ("solution_text" in st.session_state) if current_doc_type == "AI" else ("infra_text" in st.session_state)
         
@@ -1179,75 +1114,11 @@ def main():
             st.info(f"请先在「解决方案文档」标签页中生成或导入 {doc_type_name} 文档")
         else:
             customer = st.session_state["customer_name"]
-            solution = st.session_state["solution_text"] if current_doc_type == "AI" else st.session_state["infra_text"]
-            
-            st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
+            bdgt = st.session_state.get("budget", budget)
+            left, right = st.columns([1, 1])
+            with left:
+                st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
 
-            has_svg = "svg_code" in st.session_state
-            svg_label = "重新生成架构图" if has_svg else "生成 SVG 架构图"
-            if st.button(svg_label, type="primary", use_container_width=True, key="btn_svg"):
-                try:
-                    svg_prompt = (
-                        f"请根据以下解决方案架构文档生成一张完整的 SVG 架构图：\n\n"
-                        f"{solution}"
-                    )
-                    with st.spinner("正在生成 SVG 架构图..."):
-                        svg_raw = call_azure_openai(SVG_SYSTEM_PROMPT, svg_prompt)
-                        import re as _re
-                        svg_match = _re.search(r'(<svg[\s\S]*?</svg>)', svg_raw, _re.IGNORECASE)
-                        svg_code = svg_match.group(1) if svg_match else svg_raw
-                        st.session_state["svg_code"] = svg_code
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"生成失败：{e}")
-
-            if "svg_code" in st.session_state:
-                svg = st.session_state["svg_code"]
-
-                import streamlit.components.v1 as components
-                preview_html = f'''
-                <div style="background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
-                            padding: 20px; overflow-x: auto;">
-                    {svg}
-                </div>
-                '''
-                components.html(preview_html, height=700, scrolling=True)
-
-                dl_col, code_col = st.columns(2)
-                with dl_col:
-                    st.download_button(
-                        label="下载 SVG 架构图",
-                        data=svg,
-                        file_name=f"{dp}-{customer}-架构图.svg",
-                        mime="image/svg+xml",
-                        use_container_width=True,
-                    )
-                with code_col:
-                    with st.expander("查看 SVG 代码"):
-                        # 一键复制按钮
-                        import base64 as _b64
-                        svg_b64 = _b64.b64encode(svg.encode("utf-8")).decode("ascii")
-                        copy_html = f'''
-                        <textarea id="svgSrc" style="position:absolute;left:-9999px">{svg_b64}</textarea>
-                        <button id="copyBtn" onclick="
-                            var b64=document.getElementById('svgSrc').value;
-                            var txt=decodeURIComponent(escape(atob(b64)));
-                            navigator.clipboard.writeText(txt).then(function(){{
-                                document.getElementById('copyBtn').textContent='已复制';
-                                setTimeout(function(){{document.getElementById('copyBtn').textContent='复制 SVG 代码'}},2000);
-                            }});
-                        " style="background:#0078D4;color:#fff;border:none;border-radius:6px;padding:6px 18px;cursor:pointer;font-size:14px;">
-                            复制 SVG 代码
-                        </button>
-                        '''
-                        import streamlit.components.v1 as _comp
-                        _comp.html(copy_html, height=45)
-                        st.code(svg, language="xml")
-            else:
-                st.info("点击上方按钮生成架构图")
-
-    # ─────────── Tab 4: Azure Migrate CSV ───────────
-    with tab_csv:
         current_doc_type = st.session_state.get("doc_type", "AI")
         has_base_doc = ("solution_text" in st.session_state) if current_doc_type == "AI" else ("infra_text" in st.session_state)
         
@@ -1357,214 +1228,167 @@ def main():
                     st.info("上传 Excel 后点击生成")
 
 
-    # ─────────── Tab 5: 年度价格表生成器 ───────────
+    # ─────────── Tab 4: 年度价格表 ───────────
     with tab_yearly:
-        st.markdown("#### Azure 年度价格表生成器")
         st.markdown(
-            "上传从 Azure 定价计算器导出的原始 Excel，自动新增 **Estimated yearly cost** 列（月费用 × 12）并在 Total 行汇总。",
+            "上传从 Azure 定价计算器导出的原始 Excel，自动新增 **Estimated yearly cost** 列（月费用 × 12）并在 Total 行汇总。"
         )
 
         st.divider()
 
-        left_y, right_y = st.columns([1, 1])
+        uploaded_price = st.file_uploader(
+            "上传原始价格表 (.xlsx)",
+            type=["xlsx"],
+            key="upload_price_excel",
+            help="支持标准 Azure 定价计算器导出格式",
+        )
 
-        with left_y:
-            uploaded_price = st.file_uploader(
-                "上传原始价格表 (.xlsx)",
-                type=["xlsx"],
-                key="upload_price_excel",
-                help="支持标准 Azure 定价计算器导出格式",
-            )
+        if uploaded_price is not None:
+            if st.button("生成年度价格表", type="primary", use_container_width=True, key="btn_gen_yearly"):
+                import openpyxl
+                from copy import copy as _copy
+                from openpyxl.styles import Font as _Font
 
-            if uploaded_price is not None:
-                if st.button("🚀 生成年度价格表", type="primary", use_container_width=True, key="btn_gen_yearly"):
-                    import openpyxl
-                    from copy import copy as _copy
+                def _col_letter(n):
+                    result = ""
+                    while n:
+                        n, rem = divmod(n - 1, 26)
+                        result = chr(65 + rem) + result
+                    return result
 
-                    def _col_letter(n):
-                        result = ""
-                        while n:
-                            n, rem = divmod(n - 1, 26)
-                            result = chr(65 + rem) + result
-                        return result
+                def _copy_cell_style(src, dst):
+                    if src.has_style:
+                        dst.font      = _copy(src.font)
+                        dst.fill      = _copy(src.fill)
+                        dst.border    = _copy(src.border)
+                        dst.alignment = _copy(src.alignment)
+                        dst.number_format = src.number_format
 
-                    def _copy_cell_style(src, dst):
-                        if src.has_style:
-                            dst.font      = _copy(src.font)
-                            dst.fill      = _copy(src.fill)
-                            dst.border    = _copy(src.border)
-                            dst.alignment = _copy(src.alignment)
-                            dst.number_format = src.number_format
-
-                    def _find_header_row(ws):
-                        for i, row in enumerate(ws.iter_rows(values_only=True), 1):
-                            if row and "Estimated monthly cost" in row:
-                                return i
-                        return None
-
-                    def _find_total_row(ws, hrow):
-                        for i, row in enumerate(ws.iter_rows(min_row=hrow + 1, values_only=True), hrow + 1):
-                            if row and "Total" in row:
-                                return i
-                        return None
-
-                    def _process_sheet(ws):
-                        hrow = _find_header_row(ws)
-                        if hrow is None:
-                            return False, "未找到标题行（含 'Estimated monthly cost'）"
-                        trow = _find_total_row(ws, hrow)
-                        if trow is None:
-                            return False, "未找到 Total 行"
-
-                        header_vals = [ws.cell(hrow, c).value for c in range(1, ws.max_column + 1)]
-                        try:
-                            monthly_col = header_vals.index("Estimated monthly cost") + 1
-                            upfront_col = header_vals.index("Estimated upfront cost") + 1
-                        except ValueError:
-                            return False, "未找到 'Estimated monthly cost' 或 'Estimated upfront cost' 列"
-
-                        yearly_col   = upfront_col + 1
-                        ws.insert_cols(yearly_col)
-
-                        monthly_letter = _col_letter(monthly_col)
-                        yearly_letter  = _col_letter(yearly_col)
-
-                        # 标题
-                        hcell = ws.cell(hrow, yearly_col, "Estimated yearly cost")
-                        _copy_cell_style(ws.cell(hrow, upfront_col), hcell)
-                        from openpyxl.styles import Font as _Font
-                        src_hdr = ws.cell(hrow, upfront_col)
-                        hcell.font = _Font(
-                            name=src_hdr.font.name or "Calibri",
-                            bold=True,
-                            size=src_hdr.font.size or 11,
-                        )
-
-                        data_start = hrow + 1
-                        data_end   = trow - 1
-
-                        for r in range(data_start, data_end + 1):
-                            mv = ws.cell(r, monthly_col).value
-                            if mv is not None and isinstance(mv, (int, float)):
-                                cell = ws.cell(r, yearly_col)
-                                cell.value = f"={monthly_letter}{r}*12"
-                                _copy_cell_style(ws.cell(r, monthly_col), cell)
-                                cell.number_format = "#,##0.00"
-                            else:
-                                ws.cell(r, yearly_col).value = None
-
-                        # Total 行
-                        tcell = ws.cell(trow, yearly_col)
-                        tcell.value = f"=SUM({yearly_letter}{data_start}:{yearly_letter}{data_end})"
-                        _copy_cell_style(ws.cell(trow, monthly_col), tcell)
-                        tcell.number_format = "#,##0.00"
-                        tcell.font = _Font(bold=True, name="Calibri", size=11)
-
-                        ws.column_dimensions[yearly_letter].width = 22
-                        return True, f"✅ 成功处理（月费列: {monthly_letter}，年费列: {yearly_letter}，数据行 {data_start}-{data_end}）"
-
-                    try:
-                        with st.spinner("正在处理 Excel..."):
-                            wb = openpyxl.load_workbook(uploaded_price)
-                            messages = []
-                            for sname in wb.sheetnames:
-                                ok, msg = _process_sheet(wb[sname])
-                                messages.append(f"**{sname}**: {msg}")
-
-                            out_buf = io.BytesIO()
-                            wb.save(out_buf)
-                            out_buf.seek(0)
-                            st.session_state["yearly_excel_bytes"] = out_buf.getvalue()
-                            st.session_state["yearly_excel_name"]  = uploaded_price.name.replace(".xlsx", "_年度.xlsx")
-                            st.session_state["yearly_messages"]    = messages
-
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"处理失败：{e}")
-            else:
-                st.info("👆 请先上传 Excel 文件")
-
-            # 处理结果消息 + 下载
-            if "yearly_excel_bytes" in st.session_state:
-                st.markdown("---")
-                for msg in st.session_state.get("yearly_messages", []):
-                    st.markdown(msg)
-
-                st.download_button(
-                    label="⬇️ 下载年度价格表 (.xlsx)",
-                    data=st.session_state["yearly_excel_bytes"],
-                    file_name=st.session_state.get("yearly_excel_name", "年度价格表.xlsx"),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="dl_yearly",
-                )
-
-        with right_y:
-            if "yearly_excel_bytes" in st.session_state:
-                st.markdown("**📋 数据预览**")
-                try:
-                    import openpyxl, pandas as pd
-
-                    wb_prev = openpyxl.load_workbook(
-                        io.BytesIO(st.session_state["yearly_excel_bytes"]),
-                        data_only=False,
-                    )
-                    ws_prev = wb_prev.active
-
-                    # 找标题行
-                    header_row_idx = None
-                    for i, row in enumerate(ws_prev.iter_rows(values_only=True), 1):
+                def _find_header_row(ws):
+                    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
                         if row and "Estimated monthly cost" in row:
-                            header_row_idx = i
-                            break
+                            return i
+                    return None
 
-                    if header_row_idx:
-                        # 读取表头 + 数据行（过滤掉纯 None 行，截止到 Disclaimer 行）
-                        all_rows = []
-                        for r in ws_prev.iter_rows(min_row=header_row_idx, values_only=True):
-                            if r[0] == "Disclaimer":
-                                break
-                            if any(v is not None for v in r):
-                                # 把公式字符串替换为可读标签
-                                row_clean = []
-                                for v in r:
-                                    if isinstance(v, str) and v.startswith("="):
-                                        row_clean.append("(公式)")
-                                    else:
-                                        row_clean.append(v)
-                                all_rows.append(row_clean)
+                def _find_total_row(ws, hrow):
+                    for i, row in enumerate(ws.iter_rows(min_row=hrow + 1, values_only=True), hrow + 1):
+                        if row and "Total" in row:
+                            return i
+                    return None
 
-                        if len(all_rows) >= 2:
-                            headers = [str(h) if h is not None else "" for h in all_rows[0]]
-                            df_prev  = pd.DataFrame(all_rows[1:], columns=headers)
-                            # 只显示有意义的列
-                            keep_cols = [c for c in df_prev.columns if c and c != "None"]
-                            st.dataframe(df_prev[keep_cols], use_container_width=True)
+                def _get_account_name(ws):
+                    """从 Sheet 第 2 行前 5 列取账号名（非空的第一个值）。"""
+                    for col in range(1, 6):
+                        v = ws.cell(2, col).value
+                        if v and str(v).strip():
+                            return str(v).strip().rstrip("\t").strip()
+                    return None
+
+                def _process_sheet(ws):
+                    hrow = _find_header_row(ws)
+                    if hrow is None:
+                        return False, "未找到标题行（含 'Estimated monthly cost'）", None
+                    trow = _find_total_row(ws, hrow)
+                    if trow is None:
+                        return False, "未找到 Total 行", None
+
+                    header_vals = [ws.cell(hrow, c).value for c in range(1, ws.max_column + 1)]
+                    try:
+                        monthly_col = header_vals.index("Estimated monthly cost") + 1
+                        upfront_col = header_vals.index("Estimated upfront cost") + 1
+                    except ValueError:
+                        return False, "未找到必要列名", None
+
+                    yearly_col     = upfront_col + 1
+                    ws.insert_cols(yearly_col)
+                    monthly_letter = _col_letter(monthly_col)
+                    yearly_letter  = _col_letter(yearly_col)
+
+                    # 标题行：复制 upfront 列样式
+                    hcell = ws.cell(hrow, yearly_col, "Estimated yearly cost")
+                    _copy_cell_style(ws.cell(hrow, upfront_col), hcell)
+                    src_hdr = ws.cell(hrow, upfront_col)
+                    hcell.font = _Font(
+                        name=src_hdr.font.name or "Calibri",
+                        bold=True,
+                        size=src_hdr.font.size or 11,
+                    )
+
+                    data_start = hrow + 1
+                    data_end   = trow - 1
+
+                    # 数据行：写公式，复制样式并特别保留 number_format（用于显示 $）
+                    for r in range(data_start, data_end + 1):
+                        mv = ws.cell(r, monthly_col).value
+                        if mv is not None and (isinstance(mv, (int, float)) or (isinstance(mv, str) and mv.startswith("="))):
+                            cell = ws.cell(r, yearly_col)
+                            cell.value = f"={monthly_letter}{r}*12"
+                            src_cell = ws.cell(r, monthly_col)
+                            _copy_cell_style(src_cell, cell)
+                            # 显式保留原始单元格的 number_format，以带上 $ 符号
+                            if src_cell.number_format and src_cell.number_format != 'General':
+                                cell.number_format = src_cell.number_format
+                            else:
+                                cell.number_format = '"$"#,##0.00'
                         else:
-                            st.info("暂无可预览数据")
+                            ws.cell(r, yearly_col).value = None
+
+                    # Total 行
+                    tcell = ws.cell(trow, yearly_col)
+                    tcell.value = f"=SUM({yearly_letter}{data_start}:{yearly_letter}{data_end})"
+                    src_total = ws.cell(trow, monthly_col)
+                    _copy_cell_style(src_total, tcell)
+                    if src_total.number_format and src_total.number_format != 'General':
+                        tcell.number_format = src_total.number_format
                     else:
-                        st.info("未找到标题行，无法预览")
+                        tcell.number_format = '"$"#,##0.00'
+                    tcell.font = _Font(bold=True, name="Calibri", size=11)
+
+                    ws.column_dimensions[yearly_letter].width = 22
+                    
+                    account = _get_account_name(ws)
+                    return True, "处理成功", account
+
+                try:
+                    with st.spinner("正在处理 Excel..."):
+                        wb = openpyxl.load_workbook(uploaded_price)
+                        messages = []
+                        account_name = None
+                        for sname in wb.sheetnames:
+                            ok, msg, acct = _process_sheet(wb[sname])
+                            messages.append(f"**{sname}**: {msg}")
+                            if acct and not account_name:
+                                account_name = acct
+
+                        # 优先使用 extracted account name 重命名
+                        new_dl_name = f"{account_name}_年度.xlsx" if account_name else uploaded_price.name.replace(".xlsx", "_年度.xlsx")
+
+                        out_buf = io.BytesIO()
+                        wb.save(out_buf)
+                        out_buf.seek(0)
+                        st.session_state["yearly_excel_bytes"] = out_buf.getvalue()
+                        st.session_state["yearly_excel_name"]  = new_dl_name
+                        st.session_state["yearly_messages"]    = messages
+
+                    st.rerun()
                 except Exception as e:
-                    st.warning(f"预览加载失败：{e}")
-            else:
-                st.markdown(
-                    """
-                    <div style="
-                        background: linear-gradient(135deg, rgba(102,126,234,0.08), rgba(118,75,162,0.08));
-                        border: 1px dashed rgba(102,126,234,0.35);
-                        border-radius: 12px;
-                        padding: 2rem;
-                        text-align: center;
-                        color: #aaa;
-                        margin-top: 0.5rem;
-                    ">
-                        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📊</div>
-                        <div style="font-size: 1rem;">处理完成后将在此预览数据</div>
-                        <div style="font-size: 0.85rem; margin-top: 0.4rem;">包含新增的 <b>Estimated yearly cost</b> 列</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                    st.error(f"处理失败：{e}")
+        else:
+            st.info("请先上传 Excel 文件")
+
+        # 处理结果与下载
+        if "yearly_excel_bytes" in st.session_state:
+            st.divider()
+            for msg in st.session_state.get("yearly_messages", []):
+                st.markdown(msg)
+            st.download_button(
+                label="下载任务年度价格表 (.xlsx)",
+                data=st.session_state["yearly_excel_bytes"],
+                file_name=st.session_state["yearly_excel_name"],
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="dl_yearly",
+            )
 
 
 # ──────────────────────────────────────────────
