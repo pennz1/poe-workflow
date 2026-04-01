@@ -892,8 +892,8 @@ def main():
     # ════════════════════════════════════════════════════
     # Tab 布局
     # ════════════════════════════════════════════════════
-    tab_sol, tab_pov, tab_svg, tab_csv = st.tabs([
-        "解决方案文档", "POV 部署计划", "架构图 (SVG)", "Azure Migrate CSV"
+    tab_sol, tab_pov, tab_svg, tab_csv, tab_yearly = st.tabs([
+        "解决方案文档", "POV 部署计划", "架构图 (SVG)", "Azure Migrate CSV", "年度价格表"
     ])
 
     dp = _date_prefix()  # 日期前缀
@@ -1357,9 +1357,218 @@ def main():
                     st.info("上传 Excel 后点击生成")
 
 
+    # ─────────── Tab 5: 年度价格表生成器 ───────────
+    with tab_yearly:
+        st.markdown("#### Azure 年度价格表生成器")
+        st.markdown(
+            "上传从 Azure 定价计算器导出的原始 Excel，自动新增 **Estimated yearly cost** 列（月费用 × 12）并在 Total 行汇总。",
+        )
+
+        st.divider()
+
+        left_y, right_y = st.columns([1, 1])
+
+        with left_y:
+            uploaded_price = st.file_uploader(
+                "上传原始价格表 (.xlsx)",
+                type=["xlsx"],
+                key="upload_price_excel",
+                help="支持标准 Azure 定价计算器导出格式",
+            )
+
+            if uploaded_price is not None:
+                if st.button("🚀 生成年度价格表", type="primary", use_container_width=True, key="btn_gen_yearly"):
+                    import openpyxl
+                    from copy import copy as _copy
+
+                    def _col_letter(n):
+                        result = ""
+                        while n:
+                            n, rem = divmod(n - 1, 26)
+                            result = chr(65 + rem) + result
+                        return result
+
+                    def _copy_cell_style(src, dst):
+                        if src.has_style:
+                            dst.font      = _copy(src.font)
+                            dst.fill      = _copy(src.fill)
+                            dst.border    = _copy(src.border)
+                            dst.alignment = _copy(src.alignment)
+                            dst.number_format = src.number_format
+
+                    def _find_header_row(ws):
+                        for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+                            if row and "Estimated monthly cost" in row:
+                                return i
+                        return None
+
+                    def _find_total_row(ws, hrow):
+                        for i, row in enumerate(ws.iter_rows(min_row=hrow + 1, values_only=True), hrow + 1):
+                            if row and "Total" in row:
+                                return i
+                        return None
+
+                    def _process_sheet(ws):
+                        hrow = _find_header_row(ws)
+                        if hrow is None:
+                            return False, "未找到标题行（含 'Estimated monthly cost'）"
+                        trow = _find_total_row(ws, hrow)
+                        if trow is None:
+                            return False, "未找到 Total 行"
+
+                        header_vals = [ws.cell(hrow, c).value for c in range(1, ws.max_column + 1)]
+                        try:
+                            monthly_col = header_vals.index("Estimated monthly cost") + 1
+                            upfront_col = header_vals.index("Estimated upfront cost") + 1
+                        except ValueError:
+                            return False, "未找到 'Estimated monthly cost' 或 'Estimated upfront cost' 列"
+
+                        yearly_col   = upfront_col + 1
+                        ws.insert_cols(yearly_col)
+
+                        monthly_letter = _col_letter(monthly_col)
+                        yearly_letter  = _col_letter(yearly_col)
+
+                        # 标题
+                        hcell = ws.cell(hrow, yearly_col, "Estimated yearly cost")
+                        _copy_cell_style(ws.cell(hrow, upfront_col), hcell)
+                        from openpyxl.styles import Font as _Font
+                        src_hdr = ws.cell(hrow, upfront_col)
+                        hcell.font = _Font(
+                            name=src_hdr.font.name or "Calibri",
+                            bold=True,
+                            size=src_hdr.font.size or 11,
+                        )
+
+                        data_start = hrow + 1
+                        data_end   = trow - 1
+
+                        for r in range(data_start, data_end + 1):
+                            mv = ws.cell(r, monthly_col).value
+                            if mv is not None and isinstance(mv, (int, float)):
+                                cell = ws.cell(r, yearly_col)
+                                cell.value = f"={monthly_letter}{r}*12"
+                                _copy_cell_style(ws.cell(r, monthly_col), cell)
+                                cell.number_format = "#,##0.00"
+                            else:
+                                ws.cell(r, yearly_col).value = None
+
+                        # Total 行
+                        tcell = ws.cell(trow, yearly_col)
+                        tcell.value = f"=SUM({yearly_letter}{data_start}:{yearly_letter}{data_end})"
+                        _copy_cell_style(ws.cell(trow, monthly_col), tcell)
+                        tcell.number_format = "#,##0.00"
+                        tcell.font = _Font(bold=True, name="Calibri", size=11)
+
+                        ws.column_dimensions[yearly_letter].width = 22
+                        return True, f"✅ 成功处理（月费列: {monthly_letter}，年费列: {yearly_letter}，数据行 {data_start}-{data_end}）"
+
+                    try:
+                        with st.spinner("正在处理 Excel..."):
+                            wb = openpyxl.load_workbook(uploaded_price)
+                            messages = []
+                            for sname in wb.sheetnames:
+                                ok, msg = _process_sheet(wb[sname])
+                                messages.append(f"**{sname}**: {msg}")
+
+                            out_buf = io.BytesIO()
+                            wb.save(out_buf)
+                            out_buf.seek(0)
+                            st.session_state["yearly_excel_bytes"] = out_buf.getvalue()
+                            st.session_state["yearly_excel_name"]  = uploaded_price.name.replace(".xlsx", "_年度.xlsx")
+                            st.session_state["yearly_messages"]    = messages
+
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"处理失败：{e}")
+            else:
+                st.info("👆 请先上传 Excel 文件")
+
+            # 处理结果消息 + 下载
+            if "yearly_excel_bytes" in st.session_state:
+                st.markdown("---")
+                for msg in st.session_state.get("yearly_messages", []):
+                    st.markdown(msg)
+
+                st.download_button(
+                    label="⬇️ 下载年度价格表 (.xlsx)",
+                    data=st.session_state["yearly_excel_bytes"],
+                    file_name=st.session_state.get("yearly_excel_name", "年度价格表.xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_yearly",
+                )
+
+        with right_y:
+            if "yearly_excel_bytes" in st.session_state:
+                st.markdown("**📋 数据预览**")
+                try:
+                    import openpyxl, pandas as pd
+
+                    wb_prev = openpyxl.load_workbook(
+                        io.BytesIO(st.session_state["yearly_excel_bytes"]),
+                        data_only=False,
+                    )
+                    ws_prev = wb_prev.active
+
+                    # 找标题行
+                    header_row_idx = None
+                    for i, row in enumerate(ws_prev.iter_rows(values_only=True), 1):
+                        if row and "Estimated monthly cost" in row:
+                            header_row_idx = i
+                            break
+
+                    if header_row_idx:
+                        # 读取表头 + 数据行（过滤掉纯 None 行，截止到 Disclaimer 行）
+                        all_rows = []
+                        for r in ws_prev.iter_rows(min_row=header_row_idx, values_only=True):
+                            if r[0] == "Disclaimer":
+                                break
+                            if any(v is not None for v in r):
+                                # 把公式字符串替换为可读标签
+                                row_clean = []
+                                for v in r:
+                                    if isinstance(v, str) and v.startswith("="):
+                                        row_clean.append("(公式)")
+                                    else:
+                                        row_clean.append(v)
+                                all_rows.append(row_clean)
+
+                        if len(all_rows) >= 2:
+                            headers = [str(h) if h is not None else "" for h in all_rows[0]]
+                            df_prev  = pd.DataFrame(all_rows[1:], columns=headers)
+                            # 只显示有意义的列
+                            keep_cols = [c for c in df_prev.columns if c and c != "None"]
+                            st.dataframe(df_prev[keep_cols], use_container_width=True)
+                        else:
+                            st.info("暂无可预览数据")
+                    else:
+                        st.info("未找到标题行，无法预览")
+                except Exception as e:
+                    st.warning(f"预览加载失败：{e}")
+            else:
+                st.markdown(
+                    """
+                    <div style="
+                        background: linear-gradient(135deg, rgba(102,126,234,0.08), rgba(118,75,162,0.08));
+                        border: 1px dashed rgba(102,126,234,0.35);
+                        border-radius: 12px;
+                        padding: 2rem;
+                        text-align: center;
+                        color: #aaa;
+                        margin-top: 0.5rem;
+                    ">
+                        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📊</div>
+                        <div style="font-size: 1rem;">处理完成后将在此预览数据</div>
+                        <div style="font-size: 0.85rem; margin-top: 0.4rem;">包含新增的 <b>Estimated yearly cost</b> 列</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+
 # ──────────────────────────────────────────────
 # 入口
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
     main()
-
