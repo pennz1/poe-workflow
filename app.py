@@ -861,46 +861,118 @@ def main():
         left, right = st.columns([1, 1])
         with left:
             if doc_source == "手动导入":
-                # ── 手动导入已有文档 ──
-                uploaded_doc = st.file_uploader(
-                    "上传已有的 .docx 文档",
-                    type=["docx"],
-                    key="upload_existing_doc",
-                    help="上传后将自动提取文档文本内容",
-                )
-                manual_text = st.text_area(
-                    "或直接粘贴文本内容",
-                    height=200,
-                    key="manual_doc_text",
-                    placeholder="将已有的解决方案文档内容粘贴到此处...",
-                )
+                # ── 手动导入：两步流程 ──
+                # Step 1：上传 / 粘贴，确认后暂存原文
+                # Step 2：AI 按模板格式重新生成
+                if "imported_doc_text" not in st.session_state:
+                    # ── Step 1：上传或粘贴 ──
+                    uploaded_doc = st.file_uploader(
+                        "上传已有的 .docx 文档",
+                        type=["docx"],
+                        key="upload_existing_doc",
+                        help="上传后将自动提取文档文本内容",
+                    )
+                    manual_text = st.text_area(
+                        "或直接粘贴文本内容",
+                        height=200,
+                        key="manual_doc_text",
+                        placeholder="将已有的解决方案文档内容粘贴到此处...",
+                    )
 
-                if st.button("确认导入", type="primary", use_container_width=True, key="btn_import"):
-                    imported_text = ""
-                    if uploaded_doc is not None:
-                        # 从 .docx 提取全文
-                        doc = Document(uploaded_doc)
-                        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-                        # 同时提取表格内容
-                        for table in doc.tables:
-                            for row in table.rows:
-                                cells = [cell.text.strip() for cell in row.cells]
-                                paragraphs.append(" | ".join(cells))
-                        imported_text = "\n\n".join(paragraphs)
-                    elif manual_text.strip():
-                        imported_text = manual_text.strip()
-                    else:
-                        st.warning("请上传文档或粘贴文本。")
-                        st.stop()
+                    if st.button("确认导入", type="primary", use_container_width=True, key="btn_import"):
+                        imported_text = ""
+                        if uploaded_doc is not None:
+                            doc = Document(uploaded_doc)
+                            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                            for table in doc.tables:
+                                for row in table.rows:
+                                    cells = [cell.text.strip() for cell in row.cells]
+                                    paragraphs.append(" | ".join(cells))
+                            imported_text = "\n\n".join(paragraphs)
+                        elif manual_text.strip():
+                            imported_text = manual_text.strip()
+                        else:
+                            st.warning("请上传文档或粘贴文本。")
+                            st.stop()
 
-                    # 存入 session_state
+                        st.session_state["imported_doc_text"] = imported_text
+                        st.session_state["customer_name"] = customer_name.strip() if customer_name.strip() else "未命名客户"
+                        st.session_state["budget"] = budget
+                        st.rerun()
+
+                else:
+                    # ── Step 2：确认内容 + AI 重新生成 ──
+                    imported_text = st.session_state["imported_doc_text"]
+                    st.success(f"文档已导入（共 {len(imported_text)} 字符）")
+                    st.text_area(
+                        "导入内容预览",
+                        value=imported_text[:600] + "\n\n..." if len(imported_text) > 600 else imported_text,
+                        height=160,
+                        disabled=True,
+                        key="preview_imported",
+                    )
+
+                    c_reimport, c_regen = st.columns(2)
+                    with c_reimport:
+                        if st.button("重新上传", use_container_width=True, key="btn_reimport"):
+                            st.session_state.pop("imported_doc_text", None)
+                            st.rerun()
+                    with c_regen:
+                        if st.button("AI 重新生成", type="primary", use_container_width=True, key="btn_regen_import"):
+                            cust = customer_name.strip() or st.session_state.get("customer_name", "未命名客户")
+                            system_prompt = SOLUTION_SYSTEM_PROMPT if current_doc_type == "AI" else INFRA_SYSTEM_PROMPT
+                            ref_text = solution_ref if current_doc_type == "AI" else infra_ref
+                            user_ctx = (
+                                f"## 客户信息\n- **客户名称**：{cust}\n\n"
+                                f"## 已有解决方案文档（请基于以下内容，按照要求的章节格式重新整理生成，不要照抄原文）\n\n"
+                                f"{imported_text}"
+                            )
+                            if ref_text:
+                                user_ctx += (
+                                    f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+                                    f"{ref_text}"
+                                )
+                            try:
+                                with st.spinner("正在基于导入内容 AI 重新生成..."):
+                                    result_text = call_azure_openai(system_prompt, user_ctx)
+                                    target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
+                                    st.session_state[target_key] = result_text
+                                    st.session_state["customer_name"] = cust
+                                    st.session_state["budget"] = budget
+                                    st.session_state.pop("pov_text", None)
+                                    st.session_state.pop("imported_doc_text", None)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"生成失败：{e}")
+
+                    # 若已生成，显示下载按钮
                     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
-                    st.session_state[target_key] = imported_text
-                    st.session_state["customer_name"] = customer_name.strip() if customer_name.strip() else "未命名客户"
-                    st.session_state["budget"] = budget
-                    st.session_state.pop("pov_text", None)
-                    st.session_state.pop("svg_code", None)
-                    st.rerun()
+                    if target_key in st.session_state:
+                        customer = st.session_state["customer_name"]
+                        if current_doc_type == "AI":
+                            docx_bytes = create_solution_docx(
+                                content=st.session_state["solution_text"], customer_name=customer
+                            )
+                            st.download_button(
+                                label="下载 AI 解决方案架构文档 (.docx)",
+                                data=docx_bytes,
+                                file_name=f"{customer}-AI解决方案架构文档.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                key="dl_sol_import",
+                            )
+                        else:
+                            docx_bytes = create_infra_docx(
+                                content=st.session_state["infra_text"], customer_name=customer
+                            )
+                            st.download_button(
+                                label="下载 Infra 基础设施架构文档 (.docx)",
+                                data=docx_bytes,
+                                file_name=f"{customer}-Infra基础设施架构文档.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                key="dl_infra_import",
+                            )
 
             else:
                 # ── AI 生成文档 ──
