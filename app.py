@@ -896,8 +896,12 @@ def main():
                             st.stop()
 
                         st.session_state["imported_doc_text"] = imported_text
+                        # 同步写入 solution_text / infra_text，使 POV 等后续步骤可立即识别到文档
+                        target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
+                        st.session_state[target_key] = imported_text
                         st.session_state["customer_name"] = customer_name.strip() if customer_name.strip() else "未命名客户"
                         st.session_state["budget"] = budget
+                        st.session_state.pop("pov_text", None)
                         st.rerun()
 
                 else:
