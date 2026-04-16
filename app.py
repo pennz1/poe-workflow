@@ -944,7 +944,7 @@ def main():
                         st.download_button(
                             label="下载 AI 解决方案架构文档 (.docx)",
                             data=docx_sol,
-                            file_name=f"{dp}-{customer}-AI解决方案架构文档.docx",
+                            file_name=f"{customer}-AI解决方案架构文档.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                         )
@@ -988,7 +988,7 @@ def main():
                         st.download_button(
                             label="下载 Infra 基础设施架构文档 (.docx)",
                             data=docx_infra,
-                            file_name=f"{dp}-{customer}-Infra基础设施架构文档.docx",
+                            file_name=f"{customer}-Infra基础设施架构文档.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                         )
@@ -1096,7 +1096,7 @@ def main():
                     st.download_button(
                         label="下载 POV 部署计划 (.docx)",
                         data=docx_pov,
-                        file_name=f"{dp}-{customer}-POV部署计划.docx",
+                        file_name=f"{customer}-POV部署计划.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         use_container_width=True,
                     )
@@ -1197,7 +1197,7 @@ def main():
                     st.download_button(
                         label="下载 Azure Migrate CSV",
                         data=csv_data.encode("utf-8-sig"),
-                        file_name=f"{dp}-{customer}-AzureMigrate.csv",
+                        file_name=f"{customer}-AzureMigrate.csv",
                         mime="text/csv",
                         use_container_width=True,
                     )
@@ -1365,7 +1365,7 @@ def main():
                                 account_name = acct
 
                         # 优先使用 extracted account name 重命名
-                        new_dl_name = f"{account_name}_年度.xlsx" if account_name else uploaded_price.name.replace(".xlsx", "_年度.xlsx")
+                        new_dl_name = f"{account_name}-年度价格表.xlsx" if account_name else uploaded_price.name.replace(".xlsx", "-年度价格表.xlsx")
 
                         out_buf = io.BytesIO()
                         wb.save(out_buf)
