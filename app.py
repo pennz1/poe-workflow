@@ -1365,7 +1365,12 @@ def main():
                                 account_name = acct
 
                         # 优先使用 extracted account name 重命名
-                        new_dl_name = f"{account_name}-年度价格表.xlsx" if account_name else uploaded_price.name.replace(".xlsx", "-年度价格表.xlsx")
+                        _budget = st.session_state.get("budget", budget) or "未填写"
+                        new_dl_name = (
+                            f"{account_name}-calculator-{_budget}.xlsx"
+                            if account_name
+                            else uploaded_price.name.replace(".xlsx", f"-calculator-{_budget}.xlsx")
+                        )
 
                         out_buf = io.BytesIO()
                         wb.save(out_buf)
