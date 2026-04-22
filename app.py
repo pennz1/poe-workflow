@@ -791,7 +791,7 @@ def main():
     with st.sidebar:
         st.markdown("### 操作")
         if st.button("清除所有结果", use_container_width=True):
-            for key in ["solution_text", "infra_text", "pov_text", "customer_name", "csv_code", "budget", "doc_type", "yearly_excel_bytes", "yearly_excel_name", "yearly_messages"]:
+            for key in ["solution_text", "infra_text", "pov_text", "customer_name", "account_name", "csv_code", "budget", "doc_type", "yearly_excel_bytes", "yearly_excel_name", "yearly_messages"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -814,7 +814,9 @@ def main():
     # 公共输入区域
     # ════════════════════════════════════════════════════
     st.markdown("### 客户信息")
-    c1, c2 = st.columns([2, 1])
+    c0, c1, c2 = st.columns([1.5, 2, 1])
+    with c0:
+        account_name = st.text_input("账户名 (必填)", placeholder="例如：Tetherflow", help="用于生成下载文件名的前缀，例如：Tetherflow")
     with c1:
         customer_name = st.text_input("客户名称 (必填)", placeholder="例如：宇宙无敌科技有限公司")
     with c2:
@@ -900,6 +902,7 @@ def main():
                         target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
                         st.session_state[target_key] = imported_text
                         st.session_state["customer_name"] = customer_name.strip() if customer_name.strip() else "未命名客户"
+                        st.session_state["account_name"] = account_name.strip() if account_name.strip() else (customer_name.strip() or "未命名客户")
                         st.session_state["budget"] = budget
                         st.session_state.pop("pov_text", None)
                         st.rerun()
@@ -942,6 +945,7 @@ def main():
                                     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
                                     st.session_state[target_key] = result_text
                                     st.session_state["customer_name"] = cust
+                                    st.session_state["account_name"] = account_name.strip() if account_name.strip() else cust
                                     st.session_state["budget"] = budget
                                     st.session_state.pop("pov_text", None)
                                     st.session_state.pop("imported_doc_text", None)
@@ -953,6 +957,7 @@ def main():
                     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
                     if target_key in st.session_state:
                         customer = st.session_state["customer_name"]
+                        acct = st.session_state.get("account_name") or account_name.strip() or customer
                         if current_doc_type == "AI":
                             docx_bytes = create_solution_docx(
                                 content=st.session_state["solution_text"], customer_name=customer
@@ -960,7 +965,7 @@ def main():
                             st.download_button(
                                 label="下载 AI 解决方案架构文档 (.docx)",
                                 data=docx_bytes,
-                                file_name=f"{customer}-AI解决方案架构文档.docx",
+                                file_name=f"{acct}-Solution Architecture.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                 use_container_width=True,
                                 key="dl_sol_import",
@@ -972,7 +977,7 @@ def main():
                             st.download_button(
                                 label="下载 Infra 基础设施架构文档 (.docx)",
                                 data=docx_bytes,
-                                file_name=f"{customer}-Infra基础设施架构文档.docx",
+                                file_name=f"{acct}-Infra Solution Architecture.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                 use_container_width=True,
                                 key="dl_infra_import",
@@ -1005,6 +1010,7 @@ def main():
                                 sol_text = call_azure_openai(SOLUTION_SYSTEM_PROMPT, user_ctx)
                                 st.session_state["solution_text"] = sol_text
                                 st.session_state["customer_name"] = customer_name
+                                st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
                                 st.session_state["budget"] = budget
                                 st.session_state.pop("pov_text", None)
                                 st.session_state.pop("svg_code", None)
@@ -1014,13 +1020,14 @@ def main():
 
                     if "solution_text" in st.session_state:
                         customer = st.session_state["customer_name"]
+                        acct = st.session_state.get("account_name") or account_name.strip() or customer
                         docx_sol = create_solution_docx(
                             content=st.session_state["solution_text"], customer_name=customer
                         )
                         st.download_button(
                             label="下载 AI 解决方案架构文档 (.docx)",
                             data=docx_sol,
-                            file_name=f"{customer}-AI解决方案架构文档.docx",
+                            file_name=f"{acct}-Solution Architecture.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                         )
@@ -1049,6 +1056,7 @@ def main():
                                 infra_text = call_azure_openai(INFRA_SYSTEM_PROMPT, user_ctx)
                                 st.session_state["infra_text"] = infra_text
                                 st.session_state["customer_name"] = customer_name
+                                st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
                                 st.session_state["budget"] = budget
                                 st.session_state.pop("pov_text", None)
                                 st.session_state.pop("svg_code", None)
@@ -1058,13 +1066,14 @@ def main():
 
                     if "infra_text" in st.session_state:
                         customer = st.session_state["customer_name"]
+                        acct = st.session_state.get("account_name") or account_name.strip() or customer
                         docx_infra = create_infra_docx(
                             content=st.session_state["infra_text"], customer_name=customer
                         )
                         st.download_button(
                             label="下载 Infra 基础设施架构文档 (.docx)",
                             data=docx_infra,
-                            file_name=f"{customer}-Infra基础设施架构文档.docx",
+                            file_name=f"{acct}-Infra Solution Architecture.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True,
                         )
@@ -1166,13 +1175,14 @@ def main():
                         st.error(f"生成失败：{e}")
 
                 if "pov_text" in st.session_state:
+                    acct = st.session_state.get("account_name") or account_name.strip() or customer
                     docx_pov = create_pov_docx(
                         content=st.session_state["pov_text"], customer_name=customer
                     )
                     st.download_button(
                         label="下载 POV 部署计划 (.docx)",
                         data=docx_pov,
-                        file_name=f"{customer}-POV部署计划.docx",
+                        file_name=f"{acct}-PostAssessment POVdeployment.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         use_container_width=True,
                     )
@@ -1269,11 +1279,12 @@ def main():
                         st.error(f"生成失败：{e}")
 
                 if "csv_code" in st.session_state:
+                    acct = st.session_state.get("account_name") or account_name.strip() or customer
                     csv_data = st.session_state["csv_code"]
                     st.download_button(
                         label="下载 Azure Migrate CSV",
                         data=csv_data.encode("utf-8-sig"),
-                        file_name=f"{customer}-AzureMigrate.csv",
+                        file_name=f"{acct}-Azure migrate report.csv",
                         mime="text/csv",
                         use_container_width=True,
                     )
@@ -1440,13 +1451,11 @@ def main():
                             if acct and not account_name:
                                 account_name = acct
 
-                        # 优先使用 extracted account name 重命名
+                        # 优先使用用户输入的账户名，其次使用 Excel 中提取的名称
                         _budget = st.session_state.get("budget", budget) or "未填写"
-                        new_dl_name = (
-                            f"{account_name}-calculator-{_budget}.xlsx"
-                            if account_name
-                            else uploaded_price.name.replace(".xlsx", f"-calculator-{_budget}.xlsx")
-                        )
+                        _acct_from_input = st.session_state.get("account_name") or account_name.strip()
+                        _acct_final = _acct_from_input or account_name or uploaded_price.name.replace(".xlsx", "")
+                        new_dl_name = f"{_acct_final}-Azure calculator.xlsx"
 
                         out_buf = io.BytesIO()
                         wb.save(out_buf)
