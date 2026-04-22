@@ -931,7 +931,13 @@ def main():
                             ref_text = solution_ref if current_doc_type == "AI" else infra_ref
                             user_ctx = (
                                 f"## 客户信息\n- **客户名称**：{cust}\n\n"
-                                f"## 已有解决方案文档（请基于以下内容，按照要求的章节格式重新整理生成，不要照抄原文）\n\n"
+                            )
+                            if customer_bg.strip():
+                                user_ctx += (
+                                    f"## 客户背景信息\n{customer_bg.strip()}\n\n"
+                                )
+                            user_ctx += (
+                                f"## 已有解决方案文档（请基于以上客户信息和以下已有文档，按照要求的章节格式重新整理生成，不要照抄原文）\n\n"
                                 f"{imported_text}"
                             )
                             if ref_text:
