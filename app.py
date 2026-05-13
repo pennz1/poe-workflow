@@ -44,6 +44,7 @@ AZURE_RESOURCE_API_VERSION = "2022-12-01"
 AZURE_PROVIDER_API_VERSION = "2021-04-01"
 AZURE_MIGRATE_API_VERSION = "2023-03-15"
 AZURE_OFFAZURE_API_VERSION = "2023-06-06"
+AZURE_MIGRATE_PROJECTS_API_VERSION = "2018-09-01-preview"
 
 # 中文字体名称
 CN_FONT = "微软雅黑"
@@ -1294,26 +1295,83 @@ def run_azure_migrate_assessment(
     register_azure_provider(subscription_id, "Microsoft.Migrate", token)
     register_azure_provider(subscription_id, "Microsoft.OffAzure", token)
 
-    progress(f"创建 Azure Migrate Assessment Project（区域：{project_location}）...")
-    project_path = (
+    # ── Step 1: 创建 migrateProject（Portal 可见） ──
+    progress(f"创建 Azure Migrate 项目（区域：{project_location}）...")
+    migrate_project_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/migrateProjects/{project_name}"
+        f"?api-version={AZURE_MIGRATE_PROJECTS_API_VERSION}"
+    )
+    mp_result = azure_arm_request("PUT", migrate_project_path, token, {
+        "properties": {},
+        "location": project_location,
+        "tags": {"createdBy": "POE Workflow"},
+    })
+    mp_id = mp_result.get("id", project_name)
+    progress(f"  ✅ migrateProject: {mp_id}")
+
+    # ── Step 2: 注册 ServerAssessment 工具 ──
+    progress("注册 ServerAssessment 工具...")
+    register_tool_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/migrateProjects/{project_name}"
+        f"/registerTool?api-version={AZURE_MIGRATE_PROJECTS_API_VERSION}"
+    )
+    try:
+        azure_arm_request("POST", register_tool_path, token, {"tool": "ServerAssessment"})
+    except Exception:
+        pass  # 可能已注册
+
+    # ── Step 3: 创建 ServerAssessment Solution ──
+    solution_name = "Servers-Assessment-ServerAssessment"
+    solution_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/migrateProjects/{project_name}"
+        f"/solutions/{solution_name}?api-version={AZURE_MIGRATE_PROJECTS_API_VERSION}"
+    )
+    sol_result = azure_arm_request("PUT", solution_path, token, {
+        "properties": {
+            "tool": "ServerAssessment",
+            "purpose": "Assessment",
+            "goal": "Servers",
+        }
+    })
+    assessment_solution_id = sol_result.get("id", "")
+    progress(f"  ✅ Assessment Solution: {assessment_solution_id}")
+
+    # ── Step 4: 创建 assessmentProject 并关联 Solution ──
+    progress("创建 Assessment Project...")
+    ap_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
         f"?api-version={AZURE_MIGRATE_API_VERSION}"
     )
-    azure_arm_request("PUT", project_path, token, {
-        "properties": {"projectStatus": "Active"},
+    ap_result = azure_arm_request("PUT", ap_path, token, {
+        "properties": {
+            "projectStatus": "Active",
+            "assessmentSolutionId": assessment_solution_id,
+        },
         "location": project_location,
         "tags": {"createdBy": "POE Workflow"},
     })
+    ap_id = ap_result.get("id", project_name)
+    progress(f"  ✅ assessmentProject: {ap_id}")
 
-    progress("创建 Azure Migrate Import Site...")
+    # ── Step 5: 创建 Import Site ──
+    progress("创建 Import Site...")
     site_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.OffAzure/importSites/{site_name}"
         f"?api-version={AZURE_OFFAZURE_API_VERSION}"
     )
-    azure_arm_request("PUT", site_path, token, {"location": project_location, "properties": {}})
+    site_result = azure_arm_request("PUT", site_path, token, {
+        "location": project_location,
+        "properties": {},
+    })
+    site_id = site_result.get("id", site_name)
+    progress(f"  ✅ Import Site: {site_id}")
 
+    # ── Step 6: 获取 SAS URL 并上传 CSV ──
     progress("获取 CSV 上传地址并上传服务器清单...")
     import_uri_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
@@ -1333,7 +1391,9 @@ def run_azure_migrate_assessment(
     )
     if upload_response.status_code >= 400:
         raise RuntimeError(f"上传 CSV 到 Azure Migrate 失败：{upload_response.status_code} {upload_response.text[:800]}")
+    progress(f"  ✅ CSV 已上传（{len(csv_bytes)} 字节）")
 
+    # ── Step 7: 触发 Import Job ──
     progress("触发 Import Job 导入服务器清单...")
     import_job_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
@@ -1341,11 +1401,13 @@ def run_azure_migrate_assessment(
         f"?api-version={AZURE_OFFAZURE_API_VERSION}"
     )
     try:
-        azure_arm_request("POST", import_job_path, token, {"properties": {"sasUri": sas_url}})
-    except Exception:
-        pass  # 某些 API 版本自动触发，忽略此错误
+        job_result = azure_arm_request("POST", import_job_path, token, {"properties": {"sasUri": sas_url}})
+        progress(f"  ✅ Import Job 已触发: {job_result.get('id', 'OK')}")
+    except Exception as e:
+        progress(f"  ⚠️ Import Job 触发异常（将依赖自动导入）: {str(e)[:200]}")
 
-    progress("创建 Import Collector 并关联服务器清单...")
+    # ── Step 8: 创建 Import Collector ──
+    progress("创建 Import Collector 关联 Import Site 到 Assessment Project...")
     collector_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
@@ -1355,13 +1417,19 @@ def run_azure_migrate_assessment(
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.OffAzure/importSites/{site_name}"
     )
-    azure_arm_request("PUT", collector_path, token, {"properties": {"discoverySiteId": discovery_site_id}})
+    coll_result = azure_arm_request("PUT", collector_path, token, {
+        "properties": {"discoverySiteId": discovery_site_id}
+    })
+    progress(f"  ✅ Import Collector: {coll_result.get('id', collector_name)}")
 
+    # ── Step 9: 等待机器导入完成 ──
     machines = wait_for_project_machines(subscription_id, resource_group, project_name, collector_name, token, progress)
     machine_ids = [machine.get("id") for machine in machines if machine.get("id")]
     if not machine_ids:
         raise RuntimeError("Azure Migrate 未返回可加入评估的服务器，请检查 CSV 导入结果。")
+    progress(f"  ✅ 已发现 {len(machine_ids)} 台服务器")
 
+    # ── Step 10: 创建评估组 ──
     progress("创建评估组并添加全部服务器 workload...")
     group_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
@@ -1369,7 +1437,9 @@ def run_azure_migrate_assessment(
         f"/groups/{group_name}?api-version={AZURE_MIGRATE_API_VERSION}"
     )
     azure_arm_request("PUT", group_path, token, {"properties": {"machines": machine_ids}, "eTag": ""})
+    progress(f"  ✅ 评估组: {group_name}（{len(machine_ids)} 台服务器）")
 
+    # ── Step 11: 创建评估 ──
     progress("创建 Azure Migrate 评估...")
     assessment_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
