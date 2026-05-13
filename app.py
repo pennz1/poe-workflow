@@ -1665,8 +1665,19 @@ def render_full_auto_poe_area(
                 return
 
             try:
+                st.session_state["auto_poe_running"] = True
                 with st.status("正在全自动生成 POE 套件", expanded=True) as status:
+                    stop_placeholder = st.empty()
+                    stop_placeholder.button(
+                        "⏹ 停止生成", type="secondary", use_container_width=True, key="btn_stop_auto_poe",
+                        on_click=lambda: st.session_state.update({"auto_poe_stop": True}),
+                    )
+
                     def progress(message: str) -> None:
+                        if st.session_state.get("auto_poe_stop"):
+                            st.session_state.pop("auto_poe_stop", None)
+                            st.session_state.pop("auto_poe_running", None)
+                            raise RuntimeError("用户已手动停止生成。")
                         status.write(message)
 
                     result = run_full_auto_poe(
@@ -1684,6 +1695,8 @@ def render_full_auto_poe_area(
                         csv_bytes=uploaded_inventory.getvalue(),
                         progress=progress,
                     )
+                    stop_placeholder.empty()
+                    st.session_state.pop("auto_poe_running", None)
                     st.session_state["auto_poe_zip_bytes"] = result["zip_bytes"]
                     st.session_state["auto_poe_zip_name"] = result["zip_name"]
                     st.session_state["auto_poe_result"] = {
@@ -1693,6 +1706,7 @@ def render_full_auto_poe_area(
                     }
                     status.update(label="全自动 POE 套件生成完成", state="complete")
             except Exception as exc:
+                st.session_state.pop("auto_poe_running", None)
                 st.session_state["auto_poe_error"] = str(exc)
                 st.error(f"全自动生成失败：{exc}")
 
