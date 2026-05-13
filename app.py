@@ -934,6 +934,42 @@ def _safe_azure_name(value: str, fallback: str, suffix: str = "", max_len: int =
     return f"{base[: max_len - reserve].strip('-')}{suffix}".strip("-")
 
 
+AZURE_MIGRATE_PROJECT_LOCATIONS = {
+    "centralus", "westeurope", "uksouth", "ukwest", "northeurope", "westus2",
+    "southeastasia", "eastasia", "centralindia", "southindia", "canadacentral",
+    "australiasoutheast", "japanwest", "japaneast", "brazilsouth", "koreacentral",
+    "koreasouth", "francecentral", "switzerlandnorth", "australiaeast", "uaenorth",
+    "southafricanorth", "germanywestcentral", "norwayeast", "jioindiawest",
+    "swedencentral", "qatarcentral", "polandcentral", "italynorth", "israelcentral",
+    "spaincentral", "mexicocentral", "newzealandnorth", "indonesiacentral",
+    "malaysiawest", "chilecentral", "austriaeast", "belgiumcentral", "denmarkeast",
+}
+
+AZURE_MIGRATE_LOCATION_ALIASES = {
+    "westus": "westus2",
+    "west us": "westus2",
+    "east us 2": "eastus2",
+    "eastus 2": "eastus2",
+}
+
+
+def _normalize_azure_location(location: str) -> str:
+    return re.sub(r"\s+", "", (location or "").strip().lower())
+
+
+def resolve_migrate_project_location(subscription_id: str, resource_group: str, token: str) -> str:
+    resource_group_payload = azure_arm_request(
+        "GET",
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}?api-version={AZURE_RESOURCE_API_VERSION}",
+        token,
+    )
+    normalized = _normalize_azure_location(resource_group_payload.get("location", ""))
+    normalized = AZURE_MIGRATE_LOCATION_ALIASES.get(normalized, normalized)
+    if normalized in AZURE_MIGRATE_PROJECT_LOCATIONS:
+        return normalized
+    return "westus2"
+
+
 def _workday_info(start_date: datetime.date, end_date: datetime.date) -> tuple[list[str], list[str]]:
     workdays = []
     weekends = []
@@ -1230,12 +1266,13 @@ def run_azure_migrate_assessment(
     collector_name = _safe_azure_name(safe_base, "poe", "collector", 55)
     group_name = _safe_azure_name(safe_base, "poe", "group", 55)
     assessment_resource_name = _safe_azure_name(assessment_name, "poe-assessment", max_len=55)
+    project_location = resolve_migrate_project_location(subscription_id, resource_group, token)
 
     progress("注册 Microsoft.Migrate 与 Microsoft.OffAzure 资源提供程序...")
     register_azure_provider(subscription_id, "Microsoft.Migrate", token)
     register_azure_provider(subscription_id, "Microsoft.OffAzure", token)
 
-    progress("创建 Azure Migrate Assessment Project...")
+    progress(f"创建 Azure Migrate Assessment Project（区域：{project_location}）...")
     project_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
@@ -1243,7 +1280,7 @@ def run_azure_migrate_assessment(
     )
     azure_arm_request("PUT", project_path, token, {
         "properties": {"projectStatus": "Active"},
-        "location": "West US",
+        "location": project_location,
         "tags": {"createdBy": "POE Workflow"},
     })
 
