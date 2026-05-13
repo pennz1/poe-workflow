@@ -817,12 +817,20 @@ def msal_device_code_login() -> None:
     if "user_code" not in flow:
         raise RuntimeError(f"无法启动 Microsoft 登录流程：{flow}")
 
-    st.info("请按下方提示完成 Microsoft 登录。登录窗口可在新标签页中打开。")
-    st.code(flow.get("message", "请访问 https://microsoft.com/devicelogin 并输入验证码。"))
+    user_code = flow["user_code"]
+    verify_url = flow.get("verification_uri", "https://microsoft.com/devicelogin")
+    st.markdown(
+        f"**验证码：** `{user_code}`　　"
+        f"👉 [点击此处登录 Microsoft]({verify_url})"
+    )
+    st.caption("请点击上方链接，在打开的页面中输入验证码完成登录。")
 
     result = app.acquire_token_by_device_flow(flow)
     if "access_token" not in result:
-        raise RuntimeError(result.get("error_description") or result.get("error") or "Microsoft 登录失败。")
+        err = result.get("error_description") or result.get("error") or "Microsoft 登录失败。"
+        if "7000218" in str(err):
+            err += "\n\n请在 Azure Portal → 应用注册 → 身份验证 → 高级设置中，将「允许公共客户端流」设为「是」。"
+        raise RuntimeError(err)
 
     account = result.get("id_token_claims", {}) or result.get("account", {}) or {}
     username = account.get("preferred_username") or account.get("email") or account.get("username") or "Azure 用户"
