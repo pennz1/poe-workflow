@@ -1274,6 +1274,17 @@ def create_assessment_excel(assessment: Dict[str, Any], assessed_machines: List[
     return buffer.getvalue()
 
 
+def _try_get_existing_resource(path: str, token: str) -> Optional[Dict[str, Any]]:
+    """尝试 GET 某资源，如果存在返回 dict，不存在返回 None。"""
+    try:
+        result = azure_arm_request("GET", path, token)
+        if result and result.get("id"):
+            return result
+    except Exception:
+        pass
+    return None
+
+
 def run_azure_migrate_assessment(
     token: str,
     subscription_id: str,
@@ -1302,13 +1313,18 @@ def run_azure_migrate_assessment(
         f"/providers/Microsoft.Migrate/migrateProjects/{project_name}"
         f"?api-version={AZURE_MIGRATE_PROJECTS_API_VERSION}"
     )
-    mp_result = azure_arm_request("PUT", migrate_project_path, token, {
-        "properties": {},
-        "location": project_location,
-        "tags": {"createdBy": "POE Workflow"},
-    })
-    mp_id = mp_result.get("id", project_name)
-    progress(f"  ✅ migrateProject: {mp_id}")
+    existing_mp = _try_get_existing_resource(migrate_project_path, token)
+    if existing_mp:
+        mp_id = existing_mp.get("id", project_name)
+        progress(f"  ✅ migrateProject 已存在，复用: {mp_id}")
+    else:
+        mp_result = azure_arm_request("PUT", migrate_project_path, token, {
+            "properties": {},
+            "location": project_location,
+            "tags": {"createdBy": "POE Workflow"},
+        })
+        mp_id = mp_result.get("id", project_name)
+        progress(f"  ✅ migrateProject: {mp_id}")
 
     # ── Step 2: 注册 ServerAssessment 工具 ──
     progress("注册 ServerAssessment 工具...")
@@ -1329,15 +1345,20 @@ def run_azure_migrate_assessment(
         f"/providers/Microsoft.Migrate/migrateProjects/{project_name}"
         f"/solutions/{solution_name}?api-version={AZURE_MIGRATE_PROJECTS_API_VERSION}"
     )
-    sol_result = azure_arm_request("PUT", solution_path, token, {
-        "properties": {
-            "tool": "ServerAssessment",
-            "purpose": "Assessment",
-            "goal": "Servers",
-        }
-    })
-    assessment_solution_id = sol_result.get("id", "")
-    progress(f"  ✅ Assessment Solution: {assessment_solution_id}")
+    existing_sol = _try_get_existing_resource(solution_path, token)
+    if existing_sol:
+        assessment_solution_id = existing_sol.get("id", "")
+        progress(f"  ✅ Assessment Solution 已存在，复用: {assessment_solution_id}")
+    else:
+        sol_result = azure_arm_request("PUT", solution_path, token, {
+            "properties": {
+                "tool": "ServerAssessment",
+                "purpose": "Assessment",
+                "goal": "Servers",
+            }
+        })
+        assessment_solution_id = sol_result.get("id", "")
+        progress(f"  ✅ Assessment Solution: {assessment_solution_id}")
 
     # ── Step 4: 创建 assessmentProject 并关联 Solution ──
     progress("创建 Assessment Project...")
@@ -1346,17 +1367,22 @@ def run_azure_migrate_assessment(
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
         f"?api-version={AZURE_MIGRATE_API_VERSION}"
     )
-    ap_result = azure_arm_request("PUT", ap_path, token, {
-        "properties": {
-            "projectStatus": "Active",
-            "assessmentSolutionId": assessment_solution_id,
-            "publicNetworkAccess": "Enabled",
-        },
-        "location": project_location,
-        "tags": {"createdBy": "POE Workflow"},
-    })
-    ap_id = ap_result.get("id", project_name)
-    progress(f"  ✅ assessmentProject: {ap_id}")
+    existing_ap = _try_get_existing_resource(ap_path, token)
+    if existing_ap:
+        ap_id = existing_ap.get("id", project_name)
+        progress(f"  ✅ assessmentProject 已存在，复用: {ap_id}")
+    else:
+        ap_result = azure_arm_request("PUT", ap_path, token, {
+            "properties": {
+                "projectStatus": "Active",
+                "assessmentSolutionId": assessment_solution_id,
+                "publicNetworkAccess": "Enabled",
+            },
+            "location": project_location,
+            "tags": {"createdBy": "POE Workflow"},
+        })
+        ap_id = ap_result.get("id", project_name)
+        progress(f"  ✅ assessmentProject: {ap_id}")
 
     # ── Step 5: 创建 Import Site ──
     progress("创建 Import Site...")
@@ -1365,12 +1391,17 @@ def run_azure_migrate_assessment(
         f"/providers/Microsoft.OffAzure/importSites/{site_name}"
         f"?api-version={AZURE_OFFAZURE_API_VERSION}"
     )
-    site_result = azure_arm_request("PUT", site_path, token, {
-        "location": project_location,
-        "properties": {},
-    })
-    site_id = site_result.get("id", site_name)
-    progress(f"  ✅ Import Site: {site_id}")
+    existing_site = _try_get_existing_resource(site_path, token)
+    if existing_site:
+        site_id = existing_site.get("id", site_name)
+        progress(f"  ✅ Import Site 已存在，复用: {site_id}")
+    else:
+        site_result = azure_arm_request("PUT", site_path, token, {
+            "location": project_location,
+            "properties": {},
+        })
+        site_id = site_result.get("id", site_name)
+        progress(f"  ✅ Import Site: {site_id}")
 
     # ── Step 6: 获取 SAS URL 并上传 CSV ──
     progress("获取 CSV 上传地址并上传服务器清单...")
@@ -1437,7 +1468,10 @@ def run_azure_migrate_assessment(
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
         f"/groups/{group_name}?api-version={AZURE_MIGRATE_API_VERSION}"
     )
-    azure_arm_request("PUT", group_path, token, {"properties": {"machines": machine_ids}, "eTag": ""})
+    azure_arm_request("PUT", group_path, token, {
+        "properties": {"machines": machine_ids, "groupType": "Import"},
+        "eTag": "",
+    })
     progress(f"  ✅ 评估组: {group_name}（{len(machine_ids)} 台服务器）")
 
     # ── Step 11: 创建评估 ──
@@ -1450,6 +1484,8 @@ def run_azure_migrate_assessment(
     )
     assessment_body = {
         "properties": {
+            "assessmentType": "MachineAssessment",
+            "groupType": "Import",
             "azureLocation": "EastUs2",
             "azureOfferCode": "MSAZR0003P",
             "azurePricingTier": "Standard",
@@ -1462,16 +1498,15 @@ def run_azure_migrate_assessment(
             "azureHybridUseBenefit": "Yes",
             "discountPercentage": 0,
             "sizingCriterion": "AsOnPremises",
-            "azureDiskType": "StandardOrPremium",
+            "azureDiskTypes": ["Premium", "StandardSSD", "Standard"],
             "azureVmFamilies": [
                 "Dv2_series", "Dv3_series", "DSv2_series", "Dsv3_series", "Ev3_series",
                 "Esv3_series", "F_series", "Fs_series", "Fsv2_series", "M_series", "D_series",
-                "DS_series", "H_series",
+                "DS_series", "H_series", "Lsv2_series",
             ],
             "vmUptime": {"daysPerMonth": 31, "hoursPerDay": 24},
             "reservedInstance": "RI3Year",
         },
-        "eTag": "",
     }
     azure_arm_request("PUT", assessment_path, token, assessment_body)
     assessment = wait_for_assessment_complete(
