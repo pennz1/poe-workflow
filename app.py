@@ -1290,7 +1290,7 @@ def run_azure_migrate_assessment(
         f"/providers/Microsoft.OffAzure/importSites/{site_name}"
         f"?api-version={AZURE_OFFAZURE_API_VERSION}"
     )
-    azure_arm_request("PUT", site_path, token, {"location": "westus", "properties": {}})
+    azure_arm_request("PUT", site_path, token, {"location": project_location, "properties": {}})
 
     progress("获取 CSV 上传地址并上传服务器清单...")
     import_uri_path = (
