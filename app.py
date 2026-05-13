@@ -1350,6 +1350,7 @@ def run_azure_migrate_assessment(
         "properties": {
             "projectStatus": "Active",
             "assessmentSolutionId": assessment_solution_id,
+            "publicNetworkAccess": "Enabled",
         },
         "location": project_location,
         "tags": {"createdBy": "POE Workflow"},
