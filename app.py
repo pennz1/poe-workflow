@@ -42,7 +42,7 @@ AZURE_ARM_SCOPE = ["https://management.azure.com/.default"]
 AZURE_MANAGEMENT_ENDPOINT = "https://management.azure.com"
 AZURE_RESOURCE_API_VERSION = "2022-12-01"
 AZURE_PROVIDER_API_VERSION = "2021-04-01"
-AZURE_MIGRATE_API_VERSION = "2019-10-01"
+AZURE_MIGRATE_API_VERSION = "2023-03-15"
 AZURE_OFFAZURE_API_VERSION = "2023-06-06"
 
 # 中文字体名称
@@ -1083,24 +1083,46 @@ def wait_for_project_machines(
     subscription_id: str,
     resource_group: str,
     project_name: str,
+    collector_name: str,
     token: str,
     progress: Callable[[str], None],
-    timeout_seconds: int = 300,
-) -> Dict[str, Any]:
-    path = (
+    timeout_seconds: int = 600,
+) -> List[Dict[str, Any]]:
+    """等待 Azure Migrate 导入完成，通过直接查询 machines 列表来判断。"""
+    machines_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"/machines?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    project_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
         f"?api-version={AZURE_MIGRATE_API_VERSION}"
     )
     deadline = time.time() + timeout_seconds
+    attempt = 0
     while time.time() < deadline:
-        project = azure_arm_request("GET", path, token)
-        machine_count = project.get("properties", {}).get("numberOfMachines", 0) or 0
-        if machine_count > 0:
-            return project
-        progress("服务器清单仍在导入中，继续等待 Azure Migrate 发现结果...")
-        time.sleep(10)
-    raise TimeoutError("等待 Azure Migrate 导入服务器清单超时，请稍后在 Azure Portal 检查导入状态。")
+        attempt += 1
+        # 先尝试直接列出 machines
+        try:
+            machines = azure_arm_list(machines_path, token)
+            if machines:
+                return machines
+        except Exception:
+            pass
+        # 也检查 project 的 numberOfMachines
+        try:
+            project = azure_arm_request("GET", project_path, token)
+            machine_count = project.get("properties", {}).get("numberOfMachines", 0) or 0
+            if machine_count > 0:
+                machines = azure_arm_list(machines_path, token)
+                if machines:
+                    return machines
+        except Exception:
+            pass
+        progress(f"服务器清单仍在导入中，继续等待 Azure Migrate 发现结果...（第 {attempt} 次检查）")
+        time.sleep(15)
+    raise TimeoutError("等待 Azure Migrate 导入服务器清单超时（10 分钟），请在 Azure Portal 检查导入状态。")
 
 
 def list_imported_machines(
@@ -1312,6 +1334,17 @@ def run_azure_migrate_assessment(
     if upload_response.status_code >= 400:
         raise RuntimeError(f"上传 CSV 到 Azure Migrate 失败：{upload_response.status_code} {upload_response.text[:800]}")
 
+    progress("触发 Import Job 导入服务器清单...")
+    import_job_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.OffAzure/importSites/{site_name}/jobs"
+        f"?api-version={AZURE_OFFAZURE_API_VERSION}"
+    )
+    try:
+        azure_arm_request("POST", import_job_path, token, {"properties": {"sasUri": sas_url}})
+    except Exception:
+        pass  # 某些 API 版本自动触发，忽略此错误
+
     progress("创建 Import Collector 并关联服务器清单...")
     collector_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
@@ -1324,8 +1357,7 @@ def run_azure_migrate_assessment(
     )
     azure_arm_request("PUT", collector_path, token, {"properties": {"discoverySiteId": discovery_site_id}})
 
-    wait_for_project_machines(subscription_id, resource_group, project_name, token, progress)
-    machines = list_imported_machines(subscription_id, resource_group, project_name, collector_name, token)
+    machines = wait_for_project_machines(subscription_id, resource_group, project_name, collector_name, token, progress)
     machine_ids = [machine.get("id") for machine in machines if machine.get("id")]
     if not machine_ids:
         raise RuntimeError("Azure Migrate 未返回可加入评估的服务器，请检查 CSV 导入结果。")
