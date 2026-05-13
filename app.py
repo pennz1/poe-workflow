@@ -10,13 +10,21 @@ import os
 import re
 import copy
 import datetime
-from typing import List, Optional
+import time
+import zipfile
+from typing import Any, Callable, Dict, List, Optional
 import streamlit as st
+import requests
 from openai import AzureOpenAI
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+
+try:
+    import msal
+except ImportError:
+    msal = None
 
 # ──────────────────────────────────────────────
 # 常量
@@ -27,6 +35,15 @@ SOLUTION_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "solution_template.docx.docx
 INFRA_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "Infra_template.docx")
 POV_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "pov_template.docx.docx")
 MIGRATE_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "AzureMigrateimporttemplate.csv")
+
+MSAL_CLIENT_ID_DEFAULT = "d999b252-3977-4eae-bdae-a0f58c5336b7"
+AZURE_AUTHORITY = "https://login.microsoftonline.com/common"
+AZURE_ARM_SCOPE = ["https://management.azure.com/.default"]
+AZURE_MANAGEMENT_ENDPOINT = "https://management.azure.com"
+AZURE_RESOURCE_API_VERSION = "2022-12-01"
+AZURE_PROVIDER_API_VERSION = "2021-04-01"
+AZURE_MIGRATE_API_VERSION = "2019-10-01"
+AZURE_OFFAZURE_API_VERSION = "2020-07-07"
 
 # 中文字体名称
 CN_FONT = "微软雅黑"
@@ -775,6 +792,780 @@ def _date_prefix():
 
 
 # ──────────────────────────────────────────────
+# 全自动 POE：MSAL 登录与 Azure ARM API
+# ──────────────────────────────────────────────
+def _get_msal_client_id() -> str:
+    """返回 MSAL Public Client ID。Client ID 不是密钥，可使用默认值。"""
+    return st.secrets.get("MSAL_CLIENT_ID", MSAL_CLIENT_ID_DEFAULT)
+
+
+def _is_azure_token_valid() -> bool:
+    expires_at = st.session_state.get("azure_token_expires_at", 0)
+    return bool(st.session_state.get("azure_token")) and time.time() < expires_at
+
+
+def msal_device_code_login() -> None:
+    """通过 MSAL Device Code Flow 登录 Azure，并将 access token 放入 session state。"""
+    if msal is None:
+        raise RuntimeError("缺少 msal 依赖，请确认 requirements.txt 已包含 msal。")
+
+    app = msal.PublicClientApplication(
+        _get_msal_client_id(),
+        authority=AZURE_AUTHORITY,
+    )
+    flow = app.initiate_device_flow(scopes=AZURE_ARM_SCOPE)
+    if "user_code" not in flow:
+        raise RuntimeError(f"无法启动 Microsoft 登录流程：{flow}")
+
+    st.info("请按下方提示完成 Microsoft 登录。登录窗口可在新标签页中打开。")
+    st.code(flow.get("message", "请访问 https://microsoft.com/devicelogin 并输入验证码。"))
+
+    result = app.acquire_token_by_device_flow(flow)
+    if "access_token" not in result:
+        raise RuntimeError(result.get("error_description") or result.get("error") or "Microsoft 登录失败。")
+
+    account = result.get("id_token_claims", {}) or result.get("account", {}) or {}
+    username = account.get("preferred_username") or account.get("email") or account.get("username") or "Azure 用户"
+    expires_in = int(result.get("expires_in", 3600))
+    st.session_state["azure_token"] = result["access_token"]
+    st.session_state["azure_user"] = username
+    st.session_state["azure_token_expires_at"] = time.time() + max(expires_in - 300, 300)
+
+
+def clear_azure_login() -> None:
+    for key in [
+        "azure_token",
+        "azure_user",
+        "azure_token_expires_at",
+        "azure_subscription_id",
+        "azure_subscription_name",
+        "azure_resource_group",
+    ]:
+        st.session_state.pop(key, None)
+
+
+def _format_arm_error(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+        error = payload.get("error", payload)
+        message = error.get("message") or str(error)
+    except Exception:
+        message = response.text
+    return f"Azure API {response.status_code}: {message[:1200]}"
+
+
+def azure_arm_request(
+    method: str,
+    path_or_url: str,
+    token: str,
+    body: Optional[Dict[str, Any]] = None,
+    timeout: int = 90,
+) -> Dict[str, Any]:
+    """调用 Azure ARM REST API。path_or_url 可传完整 URL 或 ARM 相对路径。"""
+    url = path_or_url if path_or_url.startswith("http") else f"{AZURE_MANAGEMENT_ENDPOINT}{path_or_url}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    response = requests.request(method, url, headers=headers, json=body, timeout=timeout)
+    if response.status_code >= 400:
+        raise RuntimeError(_format_arm_error(response))
+    if not response.content:
+        return {}
+    try:
+        return response.json()
+    except ValueError:
+        return {}
+
+
+def azure_arm_list(path: str, token: str) -> List[Dict[str, Any]]:
+    """读取 ARM 列表接口并处理 nextLink 分页。"""
+    items: List[Dict[str, Any]] = []
+    next_url = f"{AZURE_MANAGEMENT_ENDPOINT}{path}"
+    while next_url:
+        payload = azure_arm_request("GET", next_url, token)
+        items.extend(payload.get("value", []))
+        next_url = payload.get("nextLink")
+    return items
+
+
+def list_azure_subscriptions(token: str) -> List[Dict[str, Any]]:
+    subscriptions = azure_arm_list(f"/subscriptions?api-version={AZURE_RESOURCE_API_VERSION}", token)
+    return sorted(subscriptions, key=lambda item: item.get("displayName", ""))
+
+
+def list_azure_resource_groups(subscription_id: str, token: str) -> List[Dict[str, Any]]:
+    groups = azure_arm_list(
+        f"/subscriptions/{subscription_id}/resourceGroups?api-version={AZURE_RESOURCE_API_VERSION}",
+        token,
+    )
+    return sorted(groups, key=lambda item: item.get("name", ""))
+
+
+def _subscription_label(subscription: Dict[str, Any]) -> str:
+    display_name = subscription.get("displayName") or subscription.get("subscriptionId")
+    state = subscription.get("state", "Unknown")
+    return f"{display_name} ({state})"
+
+
+def _resource_group_label(resource_group: Dict[str, Any]) -> str:
+    name = resource_group.get("name", "")
+    location = resource_group.get("location", "")
+    return f"{name} ({location})" if location else name
+
+
+# ──────────────────────────────────────────────
+# 全自动 POE：文档、Migrate、打包
+# ──────────────────────────────────────────────
+def _safe_azure_name(value: str, fallback: str, suffix: str = "", max_len: int = 60) -> str:
+    base = re.sub(r"[^A-Za-z0-9-]+", "-", value or "").strip("-")
+    base = re.sub(r"-+", "-", base)
+    if not base:
+        base = fallback
+    reserve = len(suffix)
+    return f"{base[: max_len - reserve].strip('-')}{suffix}".strip("-")
+
+
+def _workday_info(start_date: datetime.date, end_date: datetime.date) -> tuple[list[str], list[str]]:
+    workdays = []
+    weekends = []
+    current = start_date
+    while current <= end_date:
+        target = f"{current.month}月{current.day}日"
+        if current.weekday() < 5:
+            workdays.append(target)
+        else:
+            weekends.append(target)
+        current += datetime.timedelta(days=1)
+    return workdays, weekends
+
+
+def generate_solution_artifact(
+    current_doc_type: str,
+    customer_name: str,
+    account_name: str,
+    customer_bg: str,
+    solution_ref: str,
+    infra_ref: str,
+) -> Dict[str, Any]:
+    system_prompt = SOLUTION_SYSTEM_PROMPT if current_doc_type == "AI" else INFRA_SYSTEM_PROMPT
+    ref_text = solution_ref if current_doc_type == "AI" else infra_ref
+    user_ctx = (
+        f"## 客户信息\n- **客户名称**：{customer_name}\n\n"
+        f"## 客户背景\n{customer_bg}"
+    )
+    if ref_text:
+        user_ctx += (
+            "\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+            f"{ref_text}"
+        )
+
+    content = call_azure_openai(system_prompt, user_ctx)
+    if current_doc_type == "AI":
+        docx_bytes = create_solution_docx(content=content, customer_name=customer_name)
+        file_name = f"{account_name}-Solution Architecture.docx"
+    else:
+        docx_bytes = create_infra_docx(content=content, customer_name=customer_name)
+        file_name = f"{account_name}-Infra Solution Architecture.docx"
+
+    return {"content": content, "bytes": docx_bytes, "file_name": file_name}
+
+
+def generate_pov_artifact(
+    solution_text: str,
+    customer_name: str,
+    account_name: str,
+    pov_ref: str,
+) -> Dict[str, Any]:
+    pov_start = datetime.date.today()
+    pov_end = pov_start + datetime.timedelta(days=14)
+    workdays, weekends = _workday_info(pov_start, pov_end)
+    vendor_team = "技术负责人: \nAzure架构师: \n"
+
+    pov_prompt = (
+        f"以下是已生成的解决方案架构文档，请据此生成 POV 部署计划：\n\n"
+        f"{solution_text}\n\n"
+        f"## 补充信息\n- **客户名称**：{customer_name}\n"
+        f"- **POV 周期**：{pov_start.strftime('%Y/%m/%d')} - {pov_end.strftime('%Y/%m/%d')}\n\n"
+        f"## 可用工作日清单（共 {len(workdays)} 天，必须且只能使用这些日期）\n"
+        f"{'、'.join(workdays)}\n\n"
+        f"## 禁用日期（周末，严禁安排任何任务）\n"
+        f"{'、'.join(weekends) if weekends else '无'}\n\n"
+        f"## 乙方项目人员\n{vendor_team}\n\n"
+        f"请根据客户背景信息自动生成合理的甲方人员（2-3人，包含项目负责人和技术对接人，一定要中文名！）。"
+    )
+    if pov_ref:
+        pov_prompt += (
+            "\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
+            f"{pov_ref}"
+        )
+
+    content = call_azure_openai(POV_SYSTEM_PROMPT, pov_prompt)
+    docx_bytes = create_pov_docx(content=content, customer_name=customer_name)
+    return {
+        "content": content,
+        "bytes": docx_bytes,
+        "file_name": f"{account_name}-PostAssessment POVdeployment.docx",
+    }
+
+
+def register_azure_provider(subscription_id: str, namespace: str, token: str) -> None:
+    azure_arm_request(
+        "POST",
+        f"/subscriptions/{subscription_id}/providers/{namespace}/register?api-version={AZURE_PROVIDER_API_VERSION}",
+        token,
+    )
+
+
+def _extract_sas_url(payload: Any) -> Optional[str]:
+    if isinstance(payload, str):
+        if payload.startswith("http") and "sig=" in payload:
+            return payload
+        return None
+    if isinstance(payload, dict):
+        for value in payload.values():
+            found = _extract_sas_url(value)
+            if found:
+                return found
+    if isinstance(payload, list):
+        for value in payload:
+            found = _extract_sas_url(value)
+            if found:
+                return found
+    return None
+
+
+def wait_for_project_machines(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    token: str,
+    progress: Callable[[str], None],
+    timeout_seconds: int = 300,
+) -> Dict[str, Any]:
+    path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        project = azure_arm_request("GET", path, token)
+        machine_count = project.get("properties", {}).get("numberOfMachines", 0) or 0
+        if machine_count > 0:
+            return project
+        progress("服务器清单仍在导入中，继续等待 Azure Migrate 发现结果...")
+        time.sleep(10)
+    raise TimeoutError("等待 Azure Migrate 导入服务器清单超时，请稍后在 Azure Portal 检查导入状态。")
+
+
+def list_imported_machines(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    collector_name: str,
+    token: str,
+) -> List[Dict[str, Any]]:
+    candidate_paths = [
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Migrate/assessmentProjects/{project_name}/machines?api-version={AZURE_MIGRATE_API_VERSION}",
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Migrate/assessmentProjects/{project_name}/importcollectors/{collector_name}/machines?api-version={AZURE_MIGRATE_API_VERSION}",
+    ]
+    last_error = None
+    for path in candidate_paths:
+        try:
+            machines = azure_arm_list(path, token)
+            if machines:
+                return machines
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise RuntimeError(f"无法读取 Azure Migrate 已导入服务器列表：{last_error}")
+    return []
+
+
+def wait_for_assessment_complete(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    group_name: str,
+    assessment_name: str,
+    token: str,
+    progress: Callable[[str], None],
+    timeout_seconds: int = 600,
+) -> Dict[str, Any]:
+    path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"/groups/{group_name}/assessments/{assessment_name}"
+        f"?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        assessment = azure_arm_request("GET", path, token)
+        status = assessment.get("properties", {}).get("status", "Unknown")
+        if status == "Completed":
+            return assessment
+        if status in {"Invalid", "OutOfSync"}:
+            raise RuntimeError(f"Azure Migrate 评估状态异常：{status}")
+        progress(f"评估仍在计算中，当前状态：{status}")
+        time.sleep(15)
+    raise TimeoutError("等待 Azure Migrate 评估完成超时，请稍后在 Azure Portal 检查评估结果。")
+
+
+def create_assessment_excel(assessment: Dict[str, Any], assessed_machines: List[Dict[str, Any]]) -> bytes:
+    import openpyxl
+    from openpyxl.styles import Font
+
+    wb = openpyxl.Workbook()
+    summary = wb.active
+    summary.title = "Summary"
+    props = assessment.get("properties", {})
+    summary_rows = [
+        ("Assessment Name", assessment.get("name", "")),
+        ("Status", props.get("status", "")),
+        ("Azure Location", props.get("azureLocation", "")),
+        ("Number Of Machines", props.get("numberOfMachines", "")),
+        ("Monthly Compute Cost", props.get("monthlyComputeCost", 0)),
+        ("Monthly Storage Cost", props.get("monthlyStorageCost", 0)),
+        ("Monthly Bandwidth Cost", props.get("monthlyBandwidthCost", 0)),
+    ]
+    for row in summary_rows:
+        summary.append(row)
+    summary["A1"].font = Font(bold=True)
+    summary.column_dimensions["A"].width = 28
+    summary.column_dimensions["B"].width = 32
+
+    machines_ws = wb.create_sheet("Machines")
+    machine_headers = [
+        "Server Name",
+        "Cores",
+        "Memory (MB)",
+        "OS",
+        "Recommended VM Size",
+        "Recommended Cores",
+        "Recommended Memory (MB)",
+        "Monthly Compute Cost",
+        "Monthly Storage Cost",
+        "Monthly Bandwidth Cost",
+        "Suitability",
+        "Suitability Detail",
+    ]
+    machines_ws.append(machine_headers)
+    for cell in machines_ws[1]:
+        cell.font = Font(bold=True)
+    for machine in assessed_machines:
+        mprops = machine.get("properties", {})
+        machines_ws.append([
+            mprops.get("displayName", machine.get("name", "")),
+            mprops.get("numberOfCores", ""),
+            mprops.get("megabytesOfMemory", ""),
+            mprops.get("operatingSystemName", ""),
+            mprops.get("recommendedSize", ""),
+            mprops.get("numberOfCoresForRecommendedSize", ""),
+            mprops.get("megabytesOfMemoryForRecommendedSize", ""),
+            mprops.get("monthlyComputeCostForRecommendedSize", 0),
+            mprops.get("monthlyStorageCost", 0),
+            mprops.get("monthlyBandwidthCost", 0),
+            mprops.get("suitability", ""),
+            mprops.get("suitabilityDetail", ""),
+        ])
+    for idx, width in enumerate([28, 10, 14, 36, 24, 18, 22, 22, 22, 22, 18, 40], 1):
+        machines_ws.column_dimensions[chr(64 + idx)].width = width
+
+    disks_ws = wb.create_sheet("Disks")
+    disks_ws.append([
+        "Server Name",
+        "Disk Name",
+        "Provisioned GB",
+        "Recommended Disk Size",
+        "Recommended Disk Type",
+        "Monthly Storage Cost",
+        "Suitability",
+        "Suitability Detail",
+    ])
+    for cell in disks_ws[1]:
+        cell.font = Font(bold=True)
+    for machine in assessed_machines:
+        mprops = machine.get("properties", {})
+        server_name = mprops.get("displayName", machine.get("name", ""))
+        for disk in (mprops.get("disks") or {}).values():
+            disks_ws.append([
+                server_name,
+                disk.get("displayName") or disk.get("name", ""),
+                disk.get("gigabytesProvisioned", ""),
+                disk.get("recommendedDiskSize", ""),
+                disk.get("recommendedDiskType", ""),
+                disk.get("monthlyStorageCost", 0),
+                disk.get("suitability", ""),
+                disk.get("suitabilityDetail", ""),
+            ])
+    for idx, width in enumerate([28, 24, 18, 24, 24, 22, 18, 40], 1):
+        disks_ws.column_dimensions[chr(64 + idx)].width = width
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def run_azure_migrate_assessment(
+    token: str,
+    subscription_id: str,
+    resource_group: str,
+    account_name: str,
+    assessment_name: str,
+    csv_bytes: bytes,
+    progress: Callable[[str], None],
+) -> Dict[str, Any]:
+    safe_base = _safe_azure_name(account_name, f"poe-{_date_prefix()}", max_len=36).lower()
+    project_name = _safe_azure_name(safe_base, "poe", "project", 55)
+    site_name = _safe_azure_name(safe_base, "poe", "site", 55)
+    collector_name = _safe_azure_name(safe_base, "poe", "collector", 55)
+    group_name = _safe_azure_name(safe_base, "poe", "group", 55)
+    assessment_resource_name = _safe_azure_name(assessment_name, "poe-assessment", max_len=55)
+
+    progress("注册 Microsoft.Migrate 与 Microsoft.OffAzure 资源提供程序...")
+    register_azure_provider(subscription_id, "Microsoft.Migrate", token)
+    register_azure_provider(subscription_id, "Microsoft.OffAzure", token)
+
+    progress("创建 Azure Migrate Assessment Project...")
+    project_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    azure_arm_request("PUT", project_path, token, {
+        "properties": {"projectStatus": "Active"},
+        "location": "West US",
+        "tags": {"createdBy": "POE Workflow"},
+    })
+
+    progress("创建 Azure Migrate Import Site...")
+    site_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.OffAzure/importSites/{site_name}"
+        f"?api-version={AZURE_OFFAZURE_API_VERSION}"
+    )
+    azure_arm_request("PUT", site_path, token, {"location": "westus", "properties": {}})
+
+    progress("获取 CSV 上传地址并上传服务器清单...")
+    import_uri_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.OffAzure/importSites/{site_name}/importuri"
+        f"?api-version={AZURE_OFFAZURE_API_VERSION}"
+    )
+    import_uri_payload = azure_arm_request("POST", import_uri_path, token, {})
+    sas_url = _extract_sas_url(import_uri_payload)
+    if not sas_url:
+        raise RuntimeError(f"Azure 未返回可用的 CSV 上传 SAS URL：{import_uri_payload}")
+
+    upload_response = requests.put(
+        sas_url,
+        data=csv_bytes,
+        headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "text/csv"},
+        timeout=180,
+    )
+    if upload_response.status_code >= 400:
+        raise RuntimeError(f"上传 CSV 到 Azure Migrate 失败：{upload_response.status_code} {upload_response.text[:800]}")
+
+    progress("创建 Import Collector 并关联服务器清单...")
+    collector_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"/importcollectors/{collector_name}?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    discovery_site_id = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.OffAzure/importSites/{site_name}"
+    )
+    azure_arm_request("PUT", collector_path, token, {"properties": {"discoverySiteId": discovery_site_id}})
+
+    wait_for_project_machines(subscription_id, resource_group, project_name, token, progress)
+    machines = list_imported_machines(subscription_id, resource_group, project_name, collector_name, token)
+    machine_ids = [machine.get("id") for machine in machines if machine.get("id")]
+    if not machine_ids:
+        raise RuntimeError("Azure Migrate 未返回可加入评估的服务器，请检查 CSV 导入结果。")
+
+    progress("创建评估组并添加全部服务器 workload...")
+    group_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"/groups/{group_name}?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    azure_arm_request("PUT", group_path, token, {"properties": {"machines": machine_ids}, "eTag": ""})
+
+    progress("创建 Azure Migrate 评估...")
+    assessment_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"/groups/{group_name}/assessments/{assessment_resource_name}"
+        f"?api-version={AZURE_MIGRATE_API_VERSION}"
+    )
+    assessment_body = {
+        "properties": {
+            "azureLocation": "EastUs2",
+            "azureOfferCode": "MSAZR0003P",
+            "azurePricingTier": "Standard",
+            "azureStorageRedundancy": "LocallyRedundant",
+            "scalingFactor": 1.3,
+            "percentile": "Percentile95",
+            "timeRange": "Day",
+            "stage": "InProgress",
+            "currency": "USD",
+            "azureHybridUseBenefit": "Yes",
+            "discountPercentage": 0,
+            "sizingCriterion": "AsOnPremises",
+            "azureDiskType": "StandardOrPremium",
+            "azureVmFamilies": [
+                "Dv2_series", "Dv3_series", "DSv2_series", "Dsv3_series", "Ev3_series",
+                "Esv3_series", "F_series", "Fs_series", "Fsv2_series", "M_series", "D_series",
+                "DS_series", "H_series",
+            ],
+            "vmUptime": {"daysPerMonth": 31, "hoursPerDay": 24},
+            "reservedInstance": "RI3Year",
+        },
+        "eTag": "",
+    }
+    azure_arm_request("PUT", assessment_path, token, assessment_body)
+    assessment = wait_for_assessment_complete(
+        subscription_id, resource_group, project_name, group_name, assessment_resource_name, token, progress
+    )
+
+    progress("读取评估结果并生成 Excel...")
+    assessed_machines = azure_arm_list(
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+        f"/groups/{group_name}/assessments/{assessment_resource_name}/assessedMachines"
+        f"?api-version={AZURE_MIGRATE_API_VERSION}",
+        token,
+    )
+    excel_bytes = create_assessment_excel(assessment, assessed_machines)
+    return {
+        "project_name": project_name,
+        "site_name": site_name,
+        "collector_name": collector_name,
+        "group_name": group_name,
+        "assessment_name": assessment_resource_name,
+        "assessment": assessment,
+        "assessed_machines": assessed_machines,
+        "excel_bytes": excel_bytes,
+    }
+
+
+def create_poe_zip(artifacts: List[Dict[str, Any]]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for artifact in artifacts:
+            zip_file.writestr(artifact["file_name"], artifact["bytes"])
+    return buffer.getvalue()
+
+
+def run_full_auto_poe(
+    current_doc_type: str,
+    customer_name: str,
+    account_name: str,
+    customer_bg: str,
+    solution_ref: str,
+    infra_ref: str,
+    pov_ref: str,
+    token: str,
+    subscription_id: str,
+    resource_group: str,
+    assessment_name: str,
+    csv_bytes: bytes,
+    progress: Callable[[str], None],
+) -> Dict[str, Any]:
+    progress("生成解决方案架构文档...")
+    solution_artifact = generate_solution_artifact(
+        current_doc_type, customer_name, account_name, customer_bg, solution_ref, infra_ref
+    )
+    target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
+    st.session_state[target_key] = solution_artifact["content"]
+    st.session_state["customer_name"] = customer_name
+    st.session_state["account_name"] = account_name
+
+    progress("基于解决方案文档生成 POV 部署计划...")
+    pov_artifact = generate_pov_artifact(solution_artifact["content"], customer_name, account_name, pov_ref)
+    st.session_state["pov_text"] = pov_artifact["content"]
+
+    progress("开始 Azure Migrate 自动化评估...")
+    migrate_result = run_azure_migrate_assessment(
+        token, subscription_id, resource_group, account_name, assessment_name, csv_bytes, progress
+    )
+    assessment_artifact = {
+        "file_name": f"{account_name}-Azure Migrate Assessment.xlsx",
+        "bytes": migrate_result["excel_bytes"],
+    }
+
+    progress("打包全部 POE 产出物...")
+    zip_bytes = create_poe_zip([solution_artifact, pov_artifact, assessment_artifact])
+    return {
+        "zip_bytes": zip_bytes,
+        "zip_name": f"{account_name}-POE-Complete.zip",
+        "solution": solution_artifact,
+        "pov": pov_artifact,
+        "assessment": assessment_artifact,
+        "migrate": migrate_result,
+    }
+
+
+def render_full_auto_poe_area(
+    current_doc_type: str,
+    account_name: str,
+    customer_name: str,
+    customer_bg: str,
+    solution_ref: str,
+    infra_ref: str,
+    pov_ref: str,
+) -> None:
+    st.markdown("#### 全自动化生成 POE")
+    with st.container(border=True):
+        st.caption("登录 Azure 后，上传服务器清单 CSV，可自动生成方案文档、POV，并创建 Azure Migrate 评估。")
+
+        login_col, azure_col = st.columns([1, 2])
+        with login_col:
+            if _is_azure_token_valid():
+                st.success(f"已登录：{st.session_state.get('azure_user', 'Azure 用户')}")
+                if st.button("退出 Azure 登录", use_container_width=True, key="btn_azure_logout"):
+                    clear_azure_login()
+                    st.rerun()
+            else:
+                if st.button("登录 Microsoft Azure 账户", type="primary", use_container_width=True, key="btn_azure_login"):
+                    try:
+                        msal_device_code_login()
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"登录失败：{exc}")
+
+        selected_subscription = None
+        selected_resource_group = None
+        token = st.session_state.get("azure_token")
+        with azure_col:
+            if _is_azure_token_valid():
+                try:
+                    subscriptions = list_azure_subscriptions(token)
+                    if subscriptions:
+                        subscription_labels = [_subscription_label(sub) for sub in subscriptions]
+                        default_index = next(
+                            (
+                                idx for idx, sub in enumerate(subscriptions)
+                                if "Microsoft" in (sub.get("displayName") or "")
+                                and ("合作伙伴" in (sub.get("displayName") or "") or "Partner" in (sub.get("displayName") or ""))
+                            ),
+                            0,
+                        )
+                        sub_label = st.selectbox(
+                            "订阅",
+                            subscription_labels,
+                            index=default_index,
+                            key="auto_subscription_select",
+                        )
+                        selected_subscription = subscriptions[subscription_labels.index(sub_label)]
+                        subscription_id = selected_subscription.get("subscriptionId")
+                        st.session_state["azure_subscription_id"] = subscription_id
+                        st.session_state["azure_subscription_name"] = selected_subscription.get("displayName", "")
+
+                        groups = list_azure_resource_groups(subscription_id, token)
+                        if groups:
+                            group_labels = [_resource_group_label(group) for group in groups]
+                            rg_label = st.selectbox(
+                                "资源组",
+                                group_labels,
+                                key="auto_resource_group_select",
+                            )
+                            selected_resource_group = groups[group_labels.index(rg_label)]
+                            st.session_state["azure_resource_group"] = selected_resource_group.get("name")
+                        else:
+                            st.warning("当前订阅下没有可读取的资源组。")
+                    else:
+                        st.warning("当前账户没有可读取的 Azure 订阅。")
+                except Exception as exc:
+                    st.error(f"读取 Azure 订阅或资源组失败：{exc}")
+            else:
+                st.info("请先登录 Microsoft Azure 账户。")
+
+        input_col, action_col = st.columns([2, 1])
+        with input_col:
+            uploaded_inventory = st.file_uploader(
+                "上传服务器清单 CSV",
+                type=["csv"],
+                key="auto_server_inventory_csv",
+                help="用于 Azure Migrate 的服务器清单导入。",
+            )
+        with action_col:
+            default_assessment_name = _safe_azure_name(account_name or customer_name, "poe", "assessment", 55)
+            assessment_name = st.text_input("评估名称", value=default_assessment_name, key="auto_assessment_name")
+
+        if st.button("全自动生成 POE 套件", type="primary", use_container_width=True, key="btn_full_auto_poe"):
+            cust = customer_name.strip()
+            acct = account_name.strip() or cust
+            if not cust:
+                st.warning("请输入客户名称。")
+                return
+            if not customer_bg.strip():
+                st.warning("请输入客户背景信息。")
+                return
+            if not _is_azure_token_valid():
+                st.warning("请先登录 Microsoft Azure 账户。")
+                return
+            if not selected_subscription or not selected_resource_group:
+                st.warning("请选择订阅和资源组。")
+                return
+            if uploaded_inventory is None:
+                st.warning("请上传服务器清单 CSV。")
+                return
+            if not assessment_name.strip():
+                st.warning("请输入评估名称。")
+                return
+
+            try:
+                with st.status("正在全自动生成 POE 套件", expanded=True) as status:
+                    def progress(message: str) -> None:
+                        status.write(message)
+
+                    result = run_full_auto_poe(
+                        current_doc_type=current_doc_type,
+                        customer_name=cust,
+                        account_name=acct,
+                        customer_bg=customer_bg.strip(),
+                        solution_ref=solution_ref,
+                        infra_ref=infra_ref,
+                        pov_ref=pov_ref,
+                        token=st.session_state["azure_token"],
+                        subscription_id=selected_subscription["subscriptionId"],
+                        resource_group=selected_resource_group["name"],
+                        assessment_name=assessment_name.strip(),
+                        csv_bytes=uploaded_inventory.getvalue(),
+                        progress=progress,
+                    )
+                    st.session_state["auto_poe_zip_bytes"] = result["zip_bytes"]
+                    st.session_state["auto_poe_zip_name"] = result["zip_name"]
+                    st.session_state["auto_poe_result"] = {
+                        "project_name": result["migrate"]["project_name"],
+                        "assessment_name": result["migrate"]["assessment_name"],
+                        "machine_count": len(result["migrate"].get("assessed_machines", [])),
+                    }
+                    status.update(label="全自动 POE 套件生成完成", state="complete")
+            except Exception as exc:
+                st.session_state["auto_poe_error"] = str(exc)
+                st.error(f"全自动生成失败：{exc}")
+
+        if "auto_poe_zip_bytes" in st.session_state:
+            result = st.session_state.get("auto_poe_result", {})
+            st.success(
+                f"已生成 POE 套件。Azure Migrate 项目：{result.get('project_name', '-')}；"
+                f"评估：{result.get('assessment_name', '-')}；服务器数：{result.get('machine_count', 0)}。"
+            )
+            st.download_button(
+                label="下载全部 POE 文档 (.zip)",
+                data=st.session_state["auto_poe_zip_bytes"],
+                file_name=st.session_state["auto_poe_zip_name"],
+                mime="application/zip",
+                use_container_width=True,
+                key="dl_auto_poe_zip",
+            )
+
+
+# ──────────────────────────────────────────────
 # 主界面
 # ──────────────────────────────────────────────
 def main():
@@ -791,7 +1582,11 @@ def main():
     with st.sidebar:
         st.markdown("### 操作")
         if st.button("清除所有结果", use_container_width=True):
-            for key in ["solution_text", "infra_text", "pov_text", "customer_name", "account_name", "csv_code", "budget", "doc_type", "yearly_excel_bytes", "yearly_excel_name", "yearly_messages"]:
+            for key in [
+                "solution_text", "infra_text", "pov_text", "customer_name", "account_name", "csv_code",
+                "budget", "doc_type", "yearly_excel_bytes", "yearly_excel_name", "yearly_messages",
+                "auto_poe_zip_bytes", "auto_poe_zip_name", "auto_poe_result", "auto_poe_error",
+            ]:
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -859,6 +1654,18 @@ def main():
             horizontal=True,
             key="doc_source_radio",
         )
+
+        render_full_auto_poe_area(
+            current_doc_type=current_doc_type,
+            account_name=account_name,
+            customer_name=customer_name,
+            customer_bg=customer_bg,
+            solution_ref=solution_ref,
+            infra_ref=infra_ref,
+            pov_ref=pov_ref,
+        )
+
+        st.divider()
 
         left, right = st.columns([1, 1])
         with left:
