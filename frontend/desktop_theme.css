@@ -1,0 +1,566 @@
+:root {
+    --poe-bg: oklch(99.2% 0.003 248);
+    --poe-surface: oklch(99.2% 0.003 248);
+    --poe-surface-2: oklch(95.2% 0.008 248);
+    --poe-surface-3: oklch(91.8% 0.012 248);
+    --poe-line: oklch(86.5% 0.014 248);
+    --poe-line-strong: oklch(76% 0.022 248);
+    --poe-text: oklch(24% 0.026 248);
+    --poe-muted: oklch(49% 0.024 248);
+    --poe-soft: oklch(63% 0.02 248);
+    --poe-accent: oklch(49% 0.15 250);
+    --poe-accent-strong: oklch(39% 0.15 250);
+    --poe-accent-soft: oklch(94.5% 0.032 250);
+    --poe-success: oklch(48% 0.105 152);
+    --poe-success-soft: oklch(95% 0.028 152);
+    --poe-warning: oklch(62% 0.118 78);
+    --poe-warning-soft: oklch(96% 0.034 78);
+    --poe-radius: 8px;
+    --poe-focus: 0 0 0 3px oklch(72% 0.09 250 / 0.32);
+}
+
+html,
+body,
+.stApp,
+button,
+input,
+textarea,
+select {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+
+.stApp {
+    background: var(--poe-bg);
+    color: var(--poe-text);
+}
+
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+.main {
+    background: var(--poe-bg) !important;
+}
+
+.main .block-container {
+    max-width: 1360px;
+    padding-top: 2rem;
+    padding-bottom: 4rem;
+}
+
+[data-testid="stSidebar"] {
+    background: oklch(94.8% 0.01 248);
+    border-right: 1px solid var(--poe-line);
+}
+
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+    color: var(--poe-text);
+    font-size: 0.9rem;
+    letter-spacing: 0;
+}
+
+.poe-shell-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2rem;
+    align-items: end;
+    padding: 0.75rem 0 1.25rem;
+    border-bottom: 1px solid var(--poe-line);
+    margin-bottom: 1.3rem;
+}
+
+.poe-kicker {
+    margin: 0 0 0.3rem;
+    color: var(--poe-accent);
+    font-size: 0.72rem;
+    font-weight: 760;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.poe-title {
+    margin: 0;
+    color: var(--poe-text);
+    font-size: 1.55rem !important;
+    line-height: 1.18 !important;
+    font-weight: 740 !important;
+    letter-spacing: 0 !important;
+}
+
+.poe-subtitle {
+    margin: 0.42rem 0 0;
+    max-width: 82ch;
+    color: var(--poe-muted);
+    font-size: 0.93rem;
+    line-height: 1.5;
+}
+
+.poe-header-badges,
+.poe-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    justify-content: flex-end;
+}
+
+.poe-badge,
+.poe-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.55rem;
+    padding: 0.18rem 0.5rem;
+    border: 1px solid var(--poe-line);
+    border-radius: 999px;
+    background: var(--poe-surface);
+    color: var(--poe-muted);
+    font-size: 0.74rem;
+    font-weight: 650;
+    white-space: nowrap;
+}
+
+.poe-badge[data-tone="accent"],
+.poe-pill[data-tone="accent"] {
+    background: var(--poe-accent-soft);
+    border-color: oklch(82% 0.052 250);
+    color: var(--poe-accent-strong);
+}
+
+.poe-pill[data-tone="success"] {
+    background: var(--poe-success-soft);
+    border-color: oklch(82% 0.05 152);
+    color: var(--poe-success);
+}
+
+.poe-pill[data-tone="warning"] {
+    background: var(--poe-warning-soft);
+    border-color: oklch(84% 0.06 78);
+    color: oklch(43% 0.09 78);
+}
+
+.poe-pill[data-tone="muted"] {
+    background: var(--poe-surface-2);
+    color: var(--poe-soft);
+}
+
+.poe-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0.1rem 0 0.65rem;
+}
+
+.poe-section-title {
+    margin: 0;
+    color: var(--poe-text);
+    font-size: 1rem !important;
+    line-height: 1.3 !important;
+    font-weight: 720 !important;
+    letter-spacing: 0 !important;
+}
+
+.poe-section-desc {
+    margin: 0.14rem 0 0;
+    color: var(--poe-muted);
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
+.poe-steps {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin: 0.5rem 0 0.5rem;
+}
+
+.poe-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.5rem;
+    align-items: center;
+    min-height: 2.55rem;
+    padding: 0.42rem 0.58rem;
+    border: 1px solid var(--poe-line);
+    border-radius: var(--poe-radius);
+    background: var(--poe-surface);
+    overflow: hidden;
+    transition: border-color 180ms cubic-bezier(.2,.8,.2,1), background 180ms cubic-bezier(.2,.8,.2,1);
+}
+
+.poe-step[data-state="done"] {
+    background: var(--poe-success-soft);
+    border-color: oklch(82% 0.05 152);
+}
+
+.poe-step[data-state="ready"] {
+    background: var(--poe-accent-soft);
+    border-color: oklch(82% 0.052 250);
+}
+
+.poe-step[data-state="blocked"] {
+    background: var(--poe-surface-2);
+    color: var(--poe-soft);
+}
+
+.poe-step-num {
+    position: relative;
+    width: 1.34rem;
+    height: 1.34rem;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--poe-surface-3);
+    color: var(--poe-muted);
+    font-size: 0.7rem;
+    font-weight: 760;
+    z-index: 1;
+}
+
+.poe-step[data-state="ready"] .poe-step-num::after {
+    content: "";
+    position: absolute;
+    inset: -0.32rem;
+    border-radius: 999px;
+    border: 1px solid oklch(70% 0.09 250 / 0.5);
+    animation: poe-pulse 1.55s cubic-bezier(.2,.8,.2,1) infinite;
+}
+
+.poe-step[data-state="done"] .poe-step-num {
+    background: var(--poe-success);
+    color: oklch(98% 0.01 152);
+}
+
+.poe-step[data-state="ready"] .poe-step-num {
+    background: var(--poe-accent);
+    color: oklch(98% 0.01 250);
+}
+
+.poe-step-title {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    font-weight: 720;
+    color: var(--poe-text);
+}
+
+.poe-readiness {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.35rem;
+    margin: 0.15rem 0 0.65rem;
+}
+
+.poe-ready-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.36rem;
+    min-height: 1.78rem;
+    padding: 0.26rem 0.42rem;
+    border: 1px solid var(--poe-line);
+    border-radius: 999px;
+    background: var(--poe-surface);
+    color: var(--poe-muted);
+    font-size: 0.72rem;
+}
+
+.poe-ready-item strong {
+    color: var(--poe-text);
+    font-weight: 660;
+}
+
+.poe-ready-item[data-state="done"] {
+    background: var(--poe-success-soft);
+    border-color: oklch(82% 0.05 152);
+}
+
+.poe-ready-item[data-state="todo"] {
+    background: var(--poe-warning-soft);
+    border-color: oklch(84% 0.06 78);
+}
+
+.poe-ready-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.55;
+}
+
+.poe-ready-state {
+    font-size: 0.64rem;
+    font-weight: 760;
+    color: inherit;
+    white-space: nowrap;
+}
+
+@keyframes poe-pulse {
+    from {
+        opacity: 0.75;
+        transform: scale(0.72);
+    }
+    to {
+        opacity: 0;
+        transform: scale(1.45);
+    }
+}
+
+.poe-result-panel {
+    margin: 0.95rem 0 0.75rem;
+    padding: 0.95rem;
+    border: 1px solid oklch(82% 0.05 152);
+    border-radius: 10px;
+    background: oklch(98% 0.018 152);
+}
+
+.poe-result-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid oklch(86% 0.04 152);
+}
+
+.poe-result-mark {
+    width: 1.8rem;
+    height: 1.8rem;
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--poe-success);
+    color: oklch(98% 0.01 152);
+    font-size: 0.95rem;
+    font-weight: 820;
+}
+
+.poe-result-title h3 {
+    margin: 0;
+    color: var(--poe-text);
+    font-size: 1rem;
+    line-height: 1.25;
+    font-weight: 760;
+    letter-spacing: 0;
+}
+
+.poe-result-title p {
+    margin: 0.2rem 0 0;
+    color: var(--poe-muted);
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
+.poe-result-section {
+    margin-top: 0.85rem;
+}
+
+.poe-result-section h4 {
+    margin: 0 0 0.45rem;
+    color: var(--poe-muted);
+    font-size: 0.72rem;
+    line-height: 1.2;
+    font-weight: 780;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+.poe-result-list {
+    display: grid;
+    gap: 0.36rem;
+}
+
+.poe-result-row {
+    display: grid;
+    grid-template-columns: 10.5rem minmax(0, 1fr);
+    gap: 0.7rem;
+    align-items: center;
+    min-height: 2.2rem;
+    padding: 0.42rem 0.55rem;
+    border: 1px solid oklch(88% 0.018 248);
+    border-radius: var(--poe-radius);
+    background: var(--poe-surface);
+}
+
+.poe-result-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+}
+
+.poe-result-metric {
+    min-height: 3.2rem;
+    padding: 0.5rem 0.55rem;
+    border: 1px solid oklch(88% 0.018 248);
+    border-radius: var(--poe-radius);
+    background: var(--poe-surface);
+}
+
+.poe-result-row span,
+.poe-result-metric span {
+    color: var(--poe-muted);
+    font-size: 0.76rem;
+    line-height: 1.2;
+}
+
+.poe-result-row strong,
+.poe-result-metric strong {
+    color: var(--poe-text);
+    font-size: 0.86rem;
+    font-weight: 720;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.poe-result-metric strong {
+    display: block;
+    margin-top: 0.18rem;
+    font-size: 0.92rem;
+}
+
+.poe-device-login {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    align-items: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+
+.poe-device-copy,
+.poe-device-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.35rem;
+    padding: 0 0.85rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.poe-device-copy {
+    border: 1px solid oklch(80% 0.07 78);
+    background: oklch(94.5% 0.035 78);
+    color: oklch(39% 0.085 78);
+}
+
+.poe-device-copy.is-copied {
+    border-color: oklch(48% 0.105 152);
+    background: oklch(48% 0.105 152);
+}
+
+.poe-device-link {
+    border: 1px solid oklch(86.5% 0.014 248);
+    background: oklch(99.2% 0.003 248);
+    color: oklch(39% 0.15 250);
+}
+
+.poe-sidebar-status {
+    display: grid;
+    gap: 0.36rem;
+    margin-top: 0.45rem;
+}
+
+.poe-sidebar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.42rem 0.5rem;
+    border: 1px solid var(--poe-line);
+    border-radius: var(--poe-radius);
+    background: var(--poe-surface);
+    color: var(--poe-muted);
+    font-size: 0.78rem;
+}
+
+.poe-sidebar-row strong {
+    color: var(--poe-text);
+    font-weight: 650;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    border-color: var(--poe-line) !important;
+    border-radius: var(--poe-radius) !important;
+    background: oklch(98.8% 0.004 248) !important;
+}
+
+div[data-testid="stForm"] {
+    border: 1px solid var(--poe-line);
+    border-radius: var(--poe-radius);
+    padding: 1rem;
+    background-color: var(--poe-surface);
+}
+
+div.stButton > button,
+.stDownloadButton > button,
+.stFormSubmitButton > button {
+    border-radius: var(--poe-radius) !important;
+    font-weight: 650 !important;
+    min-height: 2.35rem;
+    transition: background-color 0.16s cubic-bezier(.2,.8,.2,1), border-color 0.16s cubic-bezier(.2,.8,.2,1), box-shadow 0.16s cubic-bezier(.2,.8,.2,1) !important;
+}
+
+div.stButton > button:focus,
+.stDownloadButton > button:focus,
+.stFormSubmitButton > button:focus,
+input:focus,
+textarea:focus {
+    box-shadow: var(--poe-focus) !important;
+    border-color: var(--poe-accent) !important;
+}
+
+div.stButton > button[kind="primary"],
+.stDownloadButton > button[kind="primary"],
+.stFormSubmitButton > button[kind="primary"] {
+    background: var(--poe-accent) !important;
+    border-color: var(--poe-accent) !important;
+    color: oklch(98% 0.01 250) !important;
+}
+
+div.stButton > button[kind="primary"]:hover,
+.stDownloadButton > button[kind="primary"]:hover,
+.stFormSubmitButton > button[kind="primary"]:hover {
+    background: var(--poe-accent-strong) !important;
+    border-color: var(--poe-accent-strong) !important;
+}
+
+div[data-testid="stTextInput"] input,
+div[data-testid="stTextArea"] textarea,
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    border-radius: var(--poe-radius) !important;
+    border-color: var(--poe-line) !important;
+    background: var(--poe-surface) !important;
+}
+
+div[data-testid="stTextInput"] input {
+    min-height: 2.25rem;
+}
+
+div[data-testid="stTextArea"] textarea {
+    min-height: 5.5rem !important;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--poe-line);
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: var(--poe-radius) var(--poe-radius) 0 0;
+    padding: 0.5rem 0.85rem;
+    font-weight: 650;
+    color: var(--poe-muted);
+}
+
+.stTabs [aria-selected="true"] {
+    color: var(--poe-accent-strong) !important;
+}
+
+div[data-testid="stFileUploader"] section {
+    border-color: var(--poe-line) !important;
+    border-radius: var(--poe-radius) !important;
+    background: var(--poe-surface) !important;
+}
