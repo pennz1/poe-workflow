@@ -1407,7 +1407,7 @@ def run_azure_migrate_assessment(
     progress("获取 CSV 上传地址并上传服务器清单...")
     import_uri_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.OffAzure/importSites/{site_name}/importuri"
+        f"/providers/Microsoft.OffAzure/importSites/{site_name}/importUri"
         f"?api-version={AZURE_OFFAZURE_API_VERSION}"
     )
     import_uri_payload = azure_arm_request("POST", import_uri_path, token, {})
@@ -1425,18 +1425,13 @@ def run_azure_migrate_assessment(
         raise RuntimeError(f"上传 CSV 到 Azure Migrate 失败：{upload_response.status_code} {upload_response.text[:800]}")
     progress(f"  ✅ CSV 已上传（{len(csv_bytes)} 字节）")
 
-    # ── Step 7: 触发 Import Job ──
+    # ── Step 7: 触发 Import Job（再次调用 importUri 并传入已上传的 SAS URL） ──
     progress("触发 Import Job 导入服务器清单...")
-    import_job_path = (
-        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.OffAzure/importSites/{site_name}/jobs"
-        f"?api-version={AZURE_OFFAZURE_API_VERSION}"
-    )
     try:
-        job_result = azure_arm_request("POST", import_job_path, token, {"properties": {"sasUri": sas_url}})
-        progress(f"  ✅ Import Job 已触发: {job_result.get('id', 'OK')}")
+        job_result = azure_arm_request("POST", import_uri_path, token, {"uri": sas_url})
+        progress(f"  ✅ Import Job 已触发: {job_result.get('id', job_result.get('uri', 'OK'))}")
     except Exception as e:
-        progress(f"  ⚠️ Import Job 触发异常（将依赖自动导入）: {str(e)[:200]}")
+        progress(f"  ⚠️ Import Job 触发异常: {str(e)[:200]}")
 
     # ── Step 8: 创建 Import Collector ──
     progress("创建 Import Collector 关联 Import Site 到 Assessment Project...")
