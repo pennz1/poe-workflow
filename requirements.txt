@@ -7,3 +7,4 @@ requests>=2.31.0
 httpx[socks]>=0.24.0
 httpcore[socks]>=1.0.0
 msal>=1.28.0
+cairosvg>=2.7.0

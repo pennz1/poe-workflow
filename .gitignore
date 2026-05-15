@@ -9,3 +9,12 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+
+# Session persistence (per-user)
+.session_persist_*.json
+.session_persist.json
+.tier_cache.json
+poe-data/
+
+# Virtual environment
+.venv/

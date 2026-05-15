@@ -6,16 +6,19 @@ POE 自动生成工作流 (POE Workflow Automator)
 """
 
 import io
+import json
 import os
 import re
 import copy
+import csv as csv_stdlib
 import datetime
+import hashlib
 import time
 import zipfile
 from typing import Any, Callable, Dict, List, Optional
 import streamlit as st
 import requests
-from openai import AzureOpenAI
+from openai import OpenAI
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -59,6 +62,25 @@ AZURE_OFFAZURE_API_VERSION = "2023-06-06"
 AZURE_MIGRATE_PROJECTS_API_VERSION = "2018-09-01-preview"
 AZURE_MIGRATE_DEFAULT_TARGET_LOCATION = "WestUs2"
 
+BUILTIN_CSV_PATH = os.path.join(APP_DIR, "Azurecsvtemplate.csv")
+
+# 持久化目录：App Service 使用 /home/poe-data/（跨重启持久化），本地 fallback 到 APP_DIR
+PERSIST_DIR = os.environ.get("PERSIST_DIR", APP_DIR)
+os.makedirs(PERSIST_DIR, exist_ok=True)
+TIER_CACHE_PATH = os.path.join(PERSIST_DIR, ".tier_cache.json")
+BUDGET_TIERS = [15_000, 50_000, 100_000, 250_000]
+
+_PERSIST_KEYS = [
+    "azure_token", "azure_user", "azure_token_expires_at",
+    "azure_subscription_id", "azure_subscription_name", "azure_resource_group",
+    "_cached_subscription", "_cached_resource_group",
+    # 客户信息与生成内容 — 刷新页面不丢失
+    "solution_text", "infra_text", "pov_text", "csv_code",
+    "customer_name", "account_name", "budget", "doc_type",
+    "pov_source_doc_type", "pov_vendor_team",
+    "auto_poe_result",
+]
+
 # 中文字体名称
 CN_FONT = "微软雅黑"
 CN_FONT_ALT = "Microsoft YaHei UI"
@@ -79,21 +101,34 @@ load_desktop_theme(APP_DIR)
 
 
 # ──────────────────────────────────────────────
+# 秘钥兼容层：环境变量优先，fallback 到 st.secrets
+# ──────────────────────────────────────────────
+def get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
+    """优先从环境变量读取，fallback 到 Streamlit secrets，再 fallback 到 default。"""
+    val = os.environ.get(key)
+    if val:
+        return val
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
+# ──────────────────────────────────────────────
 # 检查 Secrets 配置
 # ──────────────────────────────────────────────
 def check_secrets() -> bool:
-    """检查 st.secrets 中是否已配置所需的 Azure OpenAI 凭据。"""
+    """检查环境变量或 st.secrets 中是否已配置所需的 OpenAI 兼容 API 凭据。"""
     required_keys = ["AZURE_OPENAI_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"]
-    missing = [k for k in required_keys if k not in st.secrets]
+    missing = [k for k in required_keys if not get_secret(k)]
     if missing:
-        st.error("⚠️ **Azure OpenAI 配置缺失**")
+        st.error("⚠️ **OpenAI API 配置缺失**")
         st.info(
-            "请在 `.streamlit/secrets.toml` 中配置以下密钥：\n\n"
+            "请通过环境变量或 `.streamlit/secrets.toml` 配置以下密钥：\n\n"
             "```toml\n"
             'AZURE_OPENAI_KEY = "your-api-key"\n'
-            'AZURE_OPENAI_ENDPOINT = "https://your-resource.openai.azure.com/"\n'
-            'AZURE_OPENAI_DEPLOYMENT = "your-deployment-name"\n'
-            'AZURE_OPENAI_API_VERSION = "2024-06-01"  # 可选，默认 2024-06-01\n'
+            'AZURE_OPENAI_ENDPOINT = "https://your-gateway.example.com/"\n'
+            'AZURE_OPENAI_DEPLOYMENT = "gpt-4o"  # 模型名称\n'
             "```"
         )
         return False
@@ -101,14 +136,14 @@ def check_secrets() -> bool:
 
 
 # ──────────────────────────────────────────────
-# Azure OpenAI 客户端
+# OpenAI 兼容客户端
 # ──────────────────────────────────────────────
-def get_openai_client() -> AzureOpenAI:
-    """创建 Azure OpenAI 客户端实例。"""
-    return AzureOpenAI(
-        api_key=st.secrets["AZURE_OPENAI_KEY"],
-        azure_endpoint=st.secrets["AZURE_OPENAI_ENDPOINT"],
-        api_version=st.secrets.get("AZURE_OPENAI_API_VERSION", "2024-06-01"),
+def get_openai_client() -> OpenAI:
+    """创建 OpenAI 兼容客户端实例（支持 NewAPI 等网关）。"""
+    base_url = get_secret("AZURE_OPENAI_ENDPOINT").rstrip("/") + "/v1"
+    return OpenAI(
+        api_key=get_secret("AZURE_OPENAI_KEY"),
+        base_url=base_url,
     )
 
 
@@ -116,17 +151,27 @@ def get_openai_client() -> AzureOpenAI:
 # LLM 调用封装
 # ──────────────────────────────────────────────
 def call_azure_openai(system_prompt: str, user_prompt: str) -> str:
-    """调用 Azure OpenAI Chat Completions API 并返回文本结果。"""
+    """调用 OpenAI 兼容 Chat Completions API 并返回文本结果。"""
     client = get_openai_client()
     response = client.chat.completions.create(
-        model=st.secrets["AZURE_OPENAI_DEPLOYMENT"],
+        model=get_secret("AZURE_OPENAI_DEPLOYMENT"),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.7,
-        max_completion_tokens=128000,
+        max_tokens=16384,
     )
+    # openai SDK 在收到非标准 JSON 响应时可能返回原始字符串而非 ChatCompletion 对象
+    if isinstance(response, str):
+        raise RuntimeError(
+            f"API 返回了非预期的原始字符串响应。响应内容: {response[:500]}"
+        )
+    if not hasattr(response, "choices") or not response.choices:
+        raise RuntimeError(
+            f"API 返回了无效响应结构: {type(response).__name__}。"
+            f"请检查 API 密钥、端点和模型名称是否正确。"
+        )
     content = response.choices[0].message.content
     if not content or not content.strip():
         raise ValueError(
@@ -190,7 +235,7 @@ SOLUTION_SYSTEM_PROMPT = (
     "**第一部分（解决方案预览）：** 用 1-2 句纯文字段落，简要描述整体方案的核心部署思路和区域选择。不使用列表，不加粗，无符号，无表情，无卡片。\n\n"
     "**第二部分（详细资源用途）：** 紧接第一部分，直接列出每个 Azure 资源的详细用途，格式严格为：资源名称: 详细用途描述（1-2句）。每个资源单独占一行，资源名称与正文之间用冒号加空格分隔，不加粗资源名称，不使用项目符号（-、*、•），不使用任何表情或卡片。控制在 4-6 个资源行。\n"
     "示例（严格照此格式，不照抄内容）：\n"
-    "Azure OpenAI (GPT-4o): 作为核心推理引擎，处理用户自然语言查询，生成个性化推荐和客服回复。\n"
+    "Azure OpenAI (GPT-5.4): 作为核心推理引擎，处理用户自然语言查询，生成个性化推荐和客服回复。\n"
     "Azure AI Speech: 提供语音识别与语音合成能力，支撑语音交互入口和呼叫中心坐席辅助场景。\n"
     "Azure AI Search: 构建向量检索索引，对接产品知识库，为模型提供精准的 RAG 上下文。\n"
     "Azure API Management: 统一管理所有 AI 服务调用入口，实现限流、鉴权及 Token 消耗监控。\n"
@@ -210,7 +255,7 @@ SOLUTION_SYSTEM_PROMPT = (
     "示例：\n"
     "| 服务名称 | 配置规格 (SKU) | 区域 | 核心用途 |\n"
     "| --- | --- | --- | --- |\n"
-    "| Azure OpenAI | GPT-4o | East US 2 | 核心 AI 推理，支撑主要业务场景。 |\n"
+    "| Azure OpenAI | GPT-5.4 | East US 2 | 核心 AI 推理，支撑主要业务场景。 |\n"
     "| Azure AI Speech | Standard (S0) | East US 2 | TTS 语音播报。 |\n\n"
     "**全局格式要求（极其重要）：**\n"
     "- 章节标题使用 `## 一、摘要` 格式（## 开头 + 中文数字编号）\n"
@@ -218,7 +263,8 @@ SOLUTION_SYSTEM_PROMPT = (
     "- **每个要点（`关键词: 正文` 格式）必须单独成段（单独一行），绝不加粗关键词，不要把多个要点拼在同一段落中**\n"
     "- **严禁对专业术语缩写进行括号解释。** 例如：写 RAG，不要写 RAG（检索增强生成）\n"
     "- **严禁在文档任何位置提及预算金额或年消耗数字**\n"
-    "- **根据客户业务场景选择合适的大模型**（GPT-5/GPT-4o 适合通用场景，o1/o3-mini 适合推理场景，GPT-4o-mini 适合高并发轻量场景），必须写具体模型名称\n"
+    "- **根据客户业务场景选择合适的大模型**（GPT-5.5 百万上下文旗舰推理、GPT-5.4/GPT-5.4-mini 适合通用推理场景、o4-mini/o3 适合深度推理场景、GPT-4.1 性价比长上下文场景），必须写具体模型名称，禁止使用已过时的 GPT-4o\n"
+    "- **方案中必须包含多种 Azure AI 服务**（如 Azure AI Search、Azure AI Speech、Azure AI Language、Azure AI Document Intelligence、Azure AI Content Safety、Azure API Management 等），根据客户业务场景合理选择，严禁只使用 Azure OpenAI 单一服务\n"
     "- **必须选择全球 Azure 区域**（East US、East US 2、West Europe、Southeast Asia、East Asia、Japan East 等），**严禁使用中国区域（China East、China North 等）**\n"
     "- 内容要精炼简洁，严格对齐参考模板的篇幅，不要更长\n"
     "- 表格必须使用 Markdown 表格语法\n\n"
@@ -299,7 +345,7 @@ POV_SYSTEM_PROMPT = (
     "先用一句话概括总体目标，然后列出 3 个可衡量的目标（不要提工作日天数）。\n"
     "**每个目标必须简洁：** 只需要一个加粗标题和 1-2 句描述即可，不要使用子列表展开。参考格式：\n"
     "**知识检索准确率:** 验证 Azure AI Search 对产品手册的检索准确率，杜绝技术参数幻觉。\n"
-    "**双模型分流:** 验证常规问答走 GPT-4o-mini 与复杂方案生成走 GPT-4o 的路由机制。\n"
+    "**双模型分流:** 验证常规问答走 GPT-5.4-mini 与复杂方案生成走 GPT-5.4 的路由机制。\n"
     "**成本与生产规划 :** 基于压测数据证明该架构能在预算内稳定运行。\n\n"
     "## 三、核心团队成员与职责\n"
     "以 Markdown 表格形式输出，表头必须为：`| 角色 | 所属方 | 姓名 | 角色职责 |`\n"
@@ -320,8 +366,147 @@ POV_SYSTEM_PROMPT = (
 )
 
 # -----------------------------------------------------------------
-# (SVG 架构图功能已移除)
+# SVG 架构图生成
 # -----------------------------------------------------------------
+SVG_SYSTEM_PROMPT = (
+    "你是一位顶尖的云计算解决方案架构师，同时也是一位精通数据可视化的资深 UI/UX 视觉设计师。"
+    "你擅长将复杂的业务逻辑与技术组件，转化为逻辑清晰、视觉美观且严格遵循企业级规范的 SVG 架构图。\n\n"
+    "你的核心任务是：根据AI解决方案架构的第二、第五、第六、第七、第八章节的架构描述文本，为我绘制一份企业级的 Azure 解决方案逻辑架构图。\n\n"
+    "你的输出必须且只能是一段完整的、符合 XML 规范、可以直接在浏览器中渲染的 `<svg>` 代码。\n\n"
+    "【强制性视觉与排版规范（极度重要）】：\n\n"
+    "1. 现代化审美：严禁生成扁平、死板、古老的纯色方块图。必须使用柔和的阴影、优雅的圆角、细腻的渐变色和清爽有序的排版。\n\n"
+    "2. SVG 定义 (Defs)：你必须在 SVG 开头包含以下 `<defs>` 块：\n"
+    "   <defs>\n"
+    "     <filter id=\"shadow\" x=\"-20%\" y=\"-20%\" width=\"140%\" height=\"140%\">\n"
+    "       <feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"4\"/>\n"
+    "       <feOffset dx=\"2\" dy=\"4\" result=\"offsetblur\"/>\n"
+    "       <feComponentTransfer><feFuncA type=\"linear\" slope=\"0.15\"/></feComponentTransfer>\n"
+    "       <feMerge><feMergeNode/><feMergeNode in=\"SourceGraphic\"/></feMerge>\n"
+    "     </filter>\n"
+    "     <linearGradient id=\"bgGradient\" x1=\"0%\" y1=\"0%\" x2=\"0%\" y2=\"100%\">\n"
+    "       <stop offset=\"0%\" style=\"stop-color:#F5F8FA;stop-opacity:1\" />\n"
+    "       <stop offset=\"100%\" style=\"stop-color:#FFFFFF;stop-opacity:1\" />\n"
+    "     </linearGradient>\n"
+    "     <linearGradient id=\"layerAI\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\">\n"
+    "       <stop offset=\"0%\" style=\"stop-color:#FFFFFF;stop-opacity:0.9\" />\n"
+    "       <stop offset=\"100%\" style=\"stop-color:#F3E8FF;stop-opacity:0.9\" />\n"
+    "     </linearGradient>\n"
+    "     <marker id=\"arrowBlue\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\">\n"
+    "       <path d=\"M0,0 L0,6 L9,3 z\" fill=\"#0078D4\" />\n"
+    "     </marker>\n"
+    "     <marker id=\"arrowPurple\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\">\n"
+    "       <path d=\"M0,0 L0,6 L9,3 z\" fill=\"#5C2D91\" />\n"
+    "     </marker>\n"
+    "   </defs>\n\n"
+    "3. 图层顺序 (Z-Index 隔离策略，绝对强制)：\n"
+    "   第 1 层：全局背景 `<rect width=\"100%\" height=\"100%\" ...>`\n"
+    "   第 2 层：区域划分大框 Zone Backgrounds\n"
+    "   第 3 层：所有连线 `<g id=\"connectors\"> ... </g>`\n"
+    "   第 4 层：所有服务组件卡片 `<g id=\"components\"> ... </g>`\n\n"
+    "4. 组件卡片绘制规范：\n"
+    "   使用 `<g transform=\"translate(x, y)\">` 来组合每个服务的图形、标题和描述。\n"
+    "   所有卡片尺寸尽量统一（width=\"220\" height=\"80\" rx=\"8\"），白色填充带阴影。\n\n"
+    "5. 连线与路由规范 (绝对强制)：\n"
+    "   严禁使用简单对角线 `<line>` 标签！严禁乱穿交叉！\n"
+    "   必须使用正交折线 (Orthogonal Routing)，由水平和垂直线段组成的 `<path>`。\n"
+    "   路径格式为 `M x1 y1 L x2 y1 L x2 y2`。\n\n"
+    "6. Azure 品牌色参考：\n"
+    "   AI/OpenAI: 紫色 #5C2D91, 网络/APIM: 蓝色 #0078D4, 数据库/Search/存储: 青绿色 #008272\n"
+    "   安全/Entra ID: 红色 #D13438, 审计/Monitor: 橙色 #E65100\n\n"
+    "【输出要求】：\n"
+    "直接输出完整的、合法的 XML/SVG 代码，禁止在代码外输出任何解释性文字。\n"
+    "SVG 标签中务必包含 xmlns=\"http://www.w3.org/2000/svg\"。确保闭合所有标签。\n"
+    "SVG 的 viewBox 建议设为 \"0 0 1200 800\"，确保可适配页面宽度。"
+)
+
+
+def _extract_svg_from_response(text: str) -> str:
+    """从 AI 响应中提取 SVG 代码块。"""
+    # 尝试提取 ```svg ... ``` 代码块
+    m = re.search(r"```(?:svg|xml)?\s*\n(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # 尝试直接匹配 <svg ... </svg>
+    m = re.search(r"(<svg[\s\S]*?</svg>)", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def generate_svg_architecture(solution_text: str, customer_name: str) -> Optional[str]:
+    """
+    根据解决方案文本生成 SVG 架构图。
+    提取第 2、5、6、7、8 章节的内容作为输入。
+    返回 SVG 字符串，失败返回 None。
+    """
+    # 提取相关章节
+    lines = solution_text.split("\n")
+    relevant_sections = []
+    current_section = None
+    capture = False
+    target_prefixes = ("二、", "五、", "六、", "七、", "八、", "2.", "5.", "6.", "7.", "8.")
+
+    for line in lines:
+        stripped = line.strip()
+        # 检测标题行（## 开头）
+        if stripped.startswith("## ") or stripped.startswith("# "):
+            heading = stripped.lstrip("#").strip()
+            if any(heading.startswith(p) for p in target_prefixes):
+                capture = True
+                current_section = heading
+                relevant_sections.append(f"\n## {heading}\n")
+            else:
+                capture = False
+        elif capture:
+            relevant_sections.append(line)
+
+    if not relevant_sections:
+        # 如果没找到编号章节，使用全文
+        context_text = solution_text[:8000]
+    else:
+        context_text = "\n".join(relevant_sections)[:8000]
+
+    user_prompt = (
+        f"请为以下客户 **{customer_name}** 的 Azure 解决方案生成 SVG 架构图。\n"
+        f"图表标题请包含客户名称：\"{customer_name} - Azure AI 解决方案架构\"。\n\n"
+        f"以下是方案的关键章节内容：\n\n{context_text}"
+    )
+
+    try:
+        svg_response = call_azure_openai(SVG_SYSTEM_PROMPT, user_prompt)
+        svg_code = _extract_svg_from_response(svg_response)
+        # 基本验证
+        if "<svg" in svg_code and "</svg>" in svg_code:
+            return svg_code
+        return None
+    except Exception:
+        return None
+
+
+def _svg_to_png_bytes(svg_code: str) -> Optional[bytes]:
+    """将 SVG 字符串转换为 PNG 字节。优先使用 cairosvg，备选使用 svglib+reportlab。"""
+    try:
+        import cairosvg
+        png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"), output_width=1200)
+        return png_bytes
+    except ImportError:
+        pass
+    try:
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPM
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w", encoding="utf-8") as f:
+            f.write(svg_code)
+            tmp_path = f.name
+        drawing = svg2rlg(tmp_path)
+        os.unlink(tmp_path)
+        if drawing:
+            png_bytes = renderPM.drawToString(drawing, fmt="PNG")
+            return png_bytes
+    except ImportError:
+        pass
+    return None
+
 
 CSV_SYSTEM_PROMPT = (
     "你是一位 Azure 迁移专家。用户会提供一份 Azure 价格估算表（包含资源名称、SKU、估算金额等）和一份 Azure Migrate 导入 CSV 模板。\n\n"
@@ -635,10 +820,11 @@ def _add_toc(doc):
     run._element.append(fldChar_end)
 
 
-def create_solution_docx(content: str, customer_name: str) -> bytes:
+def create_solution_docx(content: str, customer_name: str, svg_png_bytes: Optional[bytes] = None) -> bytes:
     """
     基于 solution 模板生成解决方案架构 Word 文档。
     布局: 封面标题（独占一页） → 目录（独占一页） → 正文
+    如果提供 svg_png_bytes，则在第二章节结束后插入架构图。
     """
     doc = _load_template(SOLUTION_TEMPLATE_PATH)
     title = _extract_title(content, f"{customer_name} - AI 解决方案架构文档")
@@ -665,7 +851,46 @@ def create_solution_docx(content: str, customer_name: str) -> bytes:
     _add_page_break(doc)
 
     # ---- 第 3 页起：正文内容（已去掉第一个 # 标题） ----
-    _markdown_to_docx(doc, body_content, body_size=9)
+    if svg_png_bytes:
+        # 在第二章节后插入架构图
+        # 查找第三个 ## 标题（即第三章开头），在其前面插入图片
+        lines = body_content.split("\n")
+        h2_count = 0
+        split_idx = len(lines)
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("## ") or (stripped.startswith("# ") and not stripped.startswith("## ")):
+                h2_count += 1
+                if h2_count == 3:  # 第三章开头
+                    split_idx = idx
+                    break
+
+        # 渲染第二章及之前的内容
+        part1 = "\n".join(lines[:split_idx])
+        _markdown_to_docx(doc, part1, body_size=9)
+
+        # 插入架构图
+        doc.add_paragraph()  # 空行
+        img_paragraph = doc.add_paragraph()
+        img_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        img_run = img_paragraph.add_run()
+        img_stream = io.BytesIO(svg_png_bytes)
+        img_run.add_picture(img_stream, width=Cm(16))
+
+        # 图注
+        caption = doc.add_paragraph()
+        caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cap_run = caption.add_run(f"图：{customer_name} Azure AI 解决方案架构图")
+        _set_run_font(cap_run, font_name=CN_FONT, size_pt=8, bold=False)
+
+        doc.add_paragraph()  # 空行
+
+        # 渲染剩余内容
+        part2 = "\n".join(lines[split_idx:])
+        if part2.strip():
+            _markdown_to_docx(doc, part2, body_size=9)
+    else:
+        _markdown_to_docx(doc, body_content, body_size=9)
 
     # 导出
     buffer = io.BytesIO()
@@ -756,7 +981,7 @@ def _date_prefix():
 # ──────────────────────────────────────────────
 def _get_msal_client_id() -> str:
     """返回 MSAL Public Client ID。Client ID 不是密钥，可使用默认值。"""
-    return st.secrets.get("MSAL_CLIENT_ID", MSAL_CLIENT_ID_DEFAULT)
+    return get_secret("MSAL_CLIENT_ID", MSAL_CLIENT_ID_DEFAULT)
 
 
 def _is_azure_token_valid() -> bool:
@@ -794,6 +1019,7 @@ def msal_device_code_login() -> None:
     st.session_state["azure_token"] = result["access_token"]
     st.session_state["azure_user"] = username
     st.session_state["azure_token_expires_at"] = time.time() + max(expires_in - 300, 300)
+    persist_session_state()
 
 
 def clear_azure_login() -> None:
@@ -804,10 +1030,11 @@ def clear_azure_login() -> None:
         "azure_subscription_id",
         "azure_subscription_name",
         "azure_resource_group",
+        "_cached_subscription",
+        "_cached_resource_group",
     ]:
         st.session_state.pop(key, None)
-
-
+    clear_session_persist()
 def _format_arm_error(response: requests.Response) -> str:
     try:
         payload = response.json()
@@ -1083,13 +1310,21 @@ def generate_solution_artifact(
 
     content = call_azure_openai(system_prompt, user_ctx)
     if current_doc_type == "AI":
-        docx_bytes = create_solution_docx(content=content, customer_name=customer_name)
+        # 生成 SVG 架构图并转换为 PNG
+        svg_png_bytes = None
+        svg_code = generate_svg_architecture(content, customer_name)
+        if svg_code:
+            svg_png_bytes = _svg_to_png_bytes(svg_code)
+        docx_bytes = create_solution_docx(content=content, customer_name=customer_name, svg_png_bytes=svg_png_bytes)
         file_name = f"{account_name}-Solution Architecture.docx"
     else:
         docx_bytes = create_infra_docx(content=content, customer_name=customer_name)
         file_name = f"{account_name}-Infra Solution Architecture.docx"
 
-    return {"content": content, "bytes": docx_bytes, "file_name": file_name}
+    result = {"content": content, "bytes": docx_bytes, "file_name": file_name}
+    if current_doc_type == "AI" and svg_code:
+        result["svg_code"] = svg_code
+    return result
 
 
 def generate_pov_artifact(
@@ -1635,6 +1870,275 @@ def parse_annual_budget_usd(raw_budget: Optional[str]) -> Optional[float]:
     return float(match.group(1)) * multiplier
 
 
+# ──────────────────────────────────────────────
+# 内置 CSV 模板 + 分规模机器选择学习
+# ──────────────────────────────────────────────
+
+def load_builtin_csv_template() -> str:
+    with open(BUILTIN_CSV_PATH, "r", encoding="utf-8-sig") as f:
+        return f.read()
+
+
+def _get_template_machine_names() -> List[str]:
+    csv_text = load_builtin_csv_template()
+    names: List[str] = []
+    for line in csv_text.strip().split("\n")[1:]:
+        if not line.strip():
+            continue
+        name = line.split(",", 1)[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _safe_csv_prefix(account_name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9\-]", "-", (account_name or "customer").strip()).strip("-") or "customer"
+
+
+def prefix_csv_server_names(csv_text: str, prefix: str) -> str:
+    lines = csv_text.strip().split("\n")
+    if not lines:
+        return csv_text
+    result = [lines[0]]
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        parts = line.split(",", 1)
+        if len(parts) >= 2:
+            original_name = parts[0].strip()
+            result.append(f"{prefix}-{original_name},{parts[1]}")
+        else:
+            result.append(line)
+    return "\n".join(result)
+
+
+def _csv_template_hash() -> str:
+    try:
+        with open(BUILTIN_CSV_PATH, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()[:12]
+    except Exception:
+        return "unknown"
+
+
+def snap_budget_to_tier(annual_budget: float) -> int:
+    if annual_budget is None or annual_budget <= 0:
+        return BUDGET_TIERS[-1]
+    for tier in BUDGET_TIERS:
+        if annual_budget <= tier * 1.15:
+            return tier
+    return BUDGET_TIERS[-1]
+
+
+def load_tier_cache() -> Dict[str, Any]:
+    if not os.path.exists(TIER_CACHE_PATH):
+        return {}
+    try:
+        with open(TIER_CACHE_PATH, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        if cache.get("template_hash") != _csv_template_hash():
+            return {}
+        created = cache.get("created_at", "")
+        if created:
+            created_dt = datetime.datetime.fromisoformat(created)
+            if (datetime.datetime.now() - created_dt).days > 7:
+                return {}
+        return cache
+    except Exception:
+        return {}
+
+
+def save_tier_cache(cache: Dict[str, Any]) -> None:
+    cache["created_at"] = datetime.datetime.now().isoformat()
+    cache["template_hash"] = _csv_template_hash()
+    with open(TIER_CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump(cache, f, indent=2, ensure_ascii=False)
+
+
+def _get_session_persist_path() -> str:
+    """返回当前 Streamlit session 对应的持久化文件路径（per-session 隔离）。"""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        ctx = get_script_run_ctx()
+        if ctx and ctx.session_id:
+            sid = hashlib.md5(ctx.session_id.encode()).hexdigest()[:8]
+        else:
+            sid = "default"
+    except Exception:
+        sid = "default"
+    return os.path.join(PERSIST_DIR, f".session_persist_{sid}.json")
+
+
+def _cleanup_stale_sessions(max_age_hours: int = 24) -> None:
+    """删除超过 max_age_hours 的旧 session 持久化文件。"""
+    try:
+        cutoff = time.time() - max_age_hours * 3600
+        for fname in os.listdir(PERSIST_DIR):
+            if fname.startswith(".session_persist_") and fname.endswith(".json"):
+                fpath = os.path.join(PERSIST_DIR, fname)
+                if os.path.getmtime(fpath) < cutoff:
+                    os.remove(fpath)
+    except Exception:
+        pass
+
+
+def persist_session_state() -> None:
+    data: Dict[str, Any] = {}
+    for k in _PERSIST_KEYS:
+        if k in st.session_state:
+            data[k] = st.session_state[k]
+    if not data:
+        return
+    try:
+        path = _get_session_persist_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def restore_session_state() -> None:
+    _cleanup_stale_sessions()
+    path = _get_session_persist_path()
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return
+    for k, v in data.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def clear_session_persist() -> None:
+    try:
+        os.remove(_get_session_persist_path())
+    except OSError:
+        pass
+
+
+def _assessed_machine_monthly_cost(machine: Dict[str, Any]) -> float:
+    props = machine.get("properties", {})
+    cost = 0.0
+    for key in ("monthlyComputeCostForRecommendedSize", "monthlyStorageCost", "monthlyBandwidthCost"):
+        try:
+            cost += float(props.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            pass
+    for comp in props.get("costComponents") or []:
+        if str(comp.get("name", "")).lower() == "monthlysecuritycost":
+            try:
+                cost += float(comp.get("value", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+    return cost
+
+
+def _strip_account_prefix(display_name: str, prefix: str) -> str:
+    if prefix and display_name.lower().startswith(prefix.lower() + "-"):
+        return display_name[len(prefix) + 1:]
+    return display_name
+
+
+def learn_tier_machine_selections(
+    assessed_machines: List[Dict[str, Any]],
+    account_prefix: str,
+    progress: Callable[[str], None],
+) -> Dict[str, Any]:
+    machine_costs: List[Dict[str, Any]] = []
+    for m in assessed_machines:
+        display_name = m.get("properties", {}).get("displayName", "")
+        monthly_cost = _assessed_machine_monthly_cost(m)
+        original_name = _strip_account_prefix(display_name, account_prefix)
+        machine_costs.append({
+            "template_name": original_name,
+            "monthly_cost": monthly_cost,
+        })
+
+    total_monthly = sum(mc["monthly_cost"] for mc in machine_costs)
+    total_annual = total_monthly * 12
+    progress(
+        f"全量评估学习基准：{len(machine_costs)} 台服务器，"
+        f"年化 {_format_usd(total_annual)}"
+    )
+
+    machine_costs.sort(key=lambda x: x["monthly_cost"])
+
+    cache: Dict[str, Any] = {
+        "total_monthly": total_monthly,
+        "total_annual": total_annual,
+        "machine_count": len(machine_costs),
+        "tiers": {},
+    }
+
+    for tier in BUDGET_TIERS:
+        target_monthly = tier / 12
+        target_max_monthly = tier * 1.2 / 12
+
+        if total_annual <= tier * 1.2:
+            selected = list(machine_costs)
+        else:
+            selected: List[Dict[str, Any]] = []
+            running = 0.0
+            for mc in machine_costs:
+                if running >= target_monthly:
+                    break
+                if running + mc["monthly_cost"] <= target_max_monthly:
+                    selected.append(mc)
+                    running += mc["monthly_cost"]
+
+            if sum(s["monthly_cost"] for s in selected) < target_monthly:
+                remaining = [mc for mc in machine_costs if mc not in selected]
+                running = sum(s["monthly_cost"] for s in selected)
+                for mc in remaining:
+                    if running + mc["monthly_cost"] > target_max_monthly:
+                        break
+                    selected.append(mc)
+                    running += mc["monthly_cost"]
+                    if running >= target_monthly:
+                        break
+
+        sel_monthly = sum(s["monthly_cost"] for s in selected)
+        sel_names = [s["template_name"] for s in selected]
+
+        cache["tiers"][str(tier)] = {
+            "machine_names": sel_names,
+            "machine_count": len(sel_names),
+            "expected_monthly": round(sel_monthly, 2),
+            "expected_annual": round(sel_monthly * 12, 2),
+        }
+        progress(
+            f"  规模 {_format_usd(float(tier))}：选择 {len(sel_names)}/{len(machine_costs)} 台，"
+            f"预期年化 {_format_usd(sel_monthly * 12)}"
+        )
+
+    return cache
+
+
+def get_machine_ids_for_tier(
+    tier: int,
+    machines: List[Dict[str, Any]],
+    account_prefix: str,
+    cache: Dict[str, Any],
+) -> List[str]:
+    tier_data = cache.get("tiers", {}).get(str(tier))
+    if not tier_data:
+        return [m.get("id") for m in machines if m.get("id")]
+
+    selected_template_names = {n.lower() for n in tier_data["machine_names"]}
+
+    selected_ids: List[str] = []
+    for m in machines:
+        display_name = m.get("properties", {}).get("displayName", "")
+        original_name = _strip_account_prefix(display_name, account_prefix)
+        if original_name.lower() in selected_template_names:
+            mid = m.get("id")
+            if mid:
+                selected_ids.append(mid)
+    return selected_ids
+
+
 def _assessment_cost_component(assessment: Dict[str, Any], component_name: str) -> float:
     props = assessment.get("properties", {})
     for component in props.get("costComponents") or []:
@@ -1683,12 +2187,55 @@ def _assessment_settings_snapshot(settings: Dict[str, Any]) -> Dict[str, Any]:
     return {key: settings.get(key) for key in keys}
 
 
-def _build_assessment_body() -> Dict[str, Any]:
+# Azure Migrate 评估地区名称映射（解决方案文档中的区域名 → API azureLocation 值）
+_REGION_NAME_TO_LOCATION = {
+    "east us": "EastUs", "east us 2": "EastUs2", "west us": "WestUs",
+    "west us 2": "WestUs2", "west us 3": "WestUs3", "central us": "CentralUs",
+    "north central us": "NorthCentralUs", "south central us": "SouthCentralUs",
+    "west europe": "WestEurope", "north europe": "NorthEurope",
+    "southeast asia": "SoutheastAsia", "east asia": "EastAsia",
+    "japan east": "JapanEast", "japan west": "JapanWest",
+    "australia east": "AustraliaEast", "australia southeast": "AustraliaSoutheast",
+    "uk south": "UKSouth", "uk west": "UKWest",
+    "canada central": "CanadaCentral", "canada east": "CanadaEast",
+    "korea central": "KoreaCentral", "korea south": "KoreaSouth",
+    "france central": "FranceCentral", "germany west central": "GermanyWestCentral",
+    "switzerland north": "SwitzerlandNorth", "norway east": "NorwayEast",
+    "brazil south": "BrazilSouth", "south africa north": "SouthAfricaNorth",
+    "uae north": "UAENorth", "india central": "CentralIndia",
+    "india south": "SouthIndia", "india west": "WestIndia",
+    "sweden central": "SwedenCentral", "qatar central": "QatarCentral",
+}
+
+
+def _extract_dominant_region(solution_text: str) -> Optional[str]:
+    """
+    从解决方案文本中提取出现频率最高的 Azure 区域，返回对应的 azureLocation API 值。
+    如果无法识别任何区域，返回 None。
+    """
+    if not solution_text:
+        return None
+    text_lower = solution_text.lower()
+    region_counts: Dict[str, int] = {}
+    # 按名称长度降序匹配，避免 "east us" 匹配到 "east us 2" 的情况
+    sorted_regions = sorted(_REGION_NAME_TO_LOCATION.keys(), key=len, reverse=True)
+    for region_name in sorted_regions:
+        count = text_lower.count(region_name)
+        if count > 0:
+            location_val = _REGION_NAME_TO_LOCATION[region_name]
+            region_counts[location_val] = region_counts.get(location_val, 0) + count
+    if not region_counts:
+        return None
+    # 返回出现次数最多的区域
+    return max(region_counts, key=region_counts.get)
+
+
+def _build_assessment_body(target_location: Optional[str] = None) -> Dict[str, Any]:
     return {
         "properties": {
             "groupType": "Import",
             "assessmentType": "MachineAssessment",
-            "azureLocation": AZURE_MIGRATE_DEFAULT_TARGET_LOCATION,
+            "azureLocation": target_location or AZURE_MIGRATE_DEFAULT_TARGET_LOCATION,
             "azureOfferCode": "MSAZR0003P",
             "azurePricingTier": "Standard",
             "azureStorageRedundancy": "LocallyRedundant",
@@ -1938,10 +2485,22 @@ def run_azure_migrate_assessment(
     resource_group: str,
     account_name: str,
     assessment_name: str,
-    csv_bytes: bytes,
     annual_budget_text: Optional[str],
     progress: Callable[[str], None],
+    target_location: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # ── 加载内置 CSV 模板，给服务器名加上客户前缀 ──
+    progress("加载内置服务器清单模板...")
+    csv_text_raw = load_builtin_csv_template()
+    safe_prefix = _safe_csv_prefix(account_name)
+    csv_text = prefix_csv_server_names(csv_text_raw, safe_prefix)
+    csv_bytes = csv_text.encode("utf-8-sig")
+    progress(f"  ✅ 已为所有服务器名添加前缀: {safe_prefix}-")
+
+    annual_budget = parse_annual_budget_usd(annual_budget_text)
+    tier = snap_budget_to_tier(annual_budget) if annual_budget and annual_budget > 0 else BUDGET_TIERS[-1]
+    progress(f"客户预估年消耗: {_format_usd(annual_budget)}，匹配规模档位: {_format_usd(float(tier))}")
+
     safe_base = _safe_azure_name(account_name, f"poe-{_date_prefix()}", max_len=36).lower()
     run_suffix = str(int(time.time()))
     short_run_suffix = run_suffix[-6:]
@@ -2280,13 +2839,86 @@ def run_azure_migrate_assessment(
         progress,
         site_name=site_name,
     )
-    machine_ids = [machine.get("id") for machine in machines if machine.get("id")]
-    if not machine_ids:
+    all_machine_ids = [machine.get("id") for machine in machines if machine.get("id")]
+    if not all_machine_ids:
         raise RuntimeError("Azure Migrate 未返回可加入评估的服务器，请检查 CSV 导入结果。")
-    progress(f"  ✅ 已发现 {len(machine_ids)} 台服务器")
+    progress(f"  ✅ 已发现 {len(all_machine_ids)} 台服务器")
 
-    # ── Step 12: 创建评估组并通过 updateMachines 加入服务器 ──
-    progress("创建评估组并添加全部服务器 workload...")
+    # ── Step 12: 分规模学习 — 确定当前规模应选哪些服务器 ──
+    cache = load_tier_cache()
+    tier_cached = bool(cache.get("tiers", {}).get(str(tier)))
+
+    if not tier_cached:
+        progress(f"规模 {_format_usd(float(tier))} 尚未学习，开始全量评估学习...")
+        learning_group_name = _safe_azure_name(safe_base, "poe", f"learn-{run_suffix}", 55)
+        learning_group_path = (
+            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+            f"/groups/{learning_group_name}?api-version={AZURE_MIGRATE_API_VERSION}"
+        )
+        azure_arm_request("PUT", learning_group_path, token, {
+            "properties": {"groupType": "Import"},
+            "eTag": "",
+        })
+        progress(f"  ✅ 已创建学习评估组: {learning_group_name}")
+
+        learn_update_path = (
+            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+            f"/groups/{learning_group_name}/updateMachines?api-version={AZURE_MIGRATE_API_VERSION}"
+        )
+        azure_arm_request("POST", learn_update_path, token, {
+            "eTag": "*",
+            "properties": {"operationType": "Add", "machines": all_machine_ids},
+        })
+        wait_for_group_machine_membership(
+            learning_group_path, token,
+            expected_machine_count=len(all_machine_ids),
+            progress=progress,
+        )
+        progress(f"  ✅ 学习评估组已关联 {len(all_machine_ids)} 台服务器")
+
+        learning_assess_name = _safe_azure_name("learning", "poe-assess", max_len=55)
+        learning_assess_path = (
+            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+            f"/groups/{learning_group_name}/assessments/{learning_assess_name}"
+            f"?api-version={AZURE_MIGRATE_API_VERSION}"
+        )
+        learning_body = _build_assessment_body()
+        azure_arm_request("PUT", learning_assess_path, token, learning_body)
+        learning_assessment = wait_for_assessment_complete(
+            subscription_id, resource_group, project_name,
+            learning_group_name, learning_assess_name, token, progress,
+        )
+        progress("  ✅ 学习评估完成，正在分析各服务器单机成本...")
+
+        learning_assessed = azure_arm_list(
+            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
+            f"/groups/{learning_group_name}/assessments/{learning_assess_name}/assessedMachines"
+            f"?api-version={AZURE_MIGRATE_API_VERSION}",
+            token,
+        )
+
+        cache = learn_tier_machine_selections(learning_assessed, safe_prefix, progress)
+        save_tier_cache(cache)
+        progress("  ✅ 所有规模学习完成，结果已缓存到本地。")
+    else:
+        tier_info = cache["tiers"][str(tier)]
+        progress(
+            f"已命中学习缓存：规模 {_format_usd(float(tier))}，"
+            f"选择 {tier_info['machine_count']} 台服务器，"
+            f"预期年化 {_format_usd(tier_info['expected_annual'])}"
+        )
+
+    selected_ids = get_machine_ids_for_tier(tier, machines, safe_prefix, cache)
+    if not selected_ids:
+        selected_ids = all_machine_ids
+    progress(f"当前规模选定 {len(selected_ids)}/{len(all_machine_ids)} 台服务器进入最终评估")
+
+    # ── Step 13: 创建最终评估组并通过 updateMachines 加入选定服务器 ──
+    progress("创建最终评估组...")
     group_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
@@ -2324,15 +2956,15 @@ def run_azure_migrate_assessment(
         "eTag": "*",
         "properties": {
             "operationType": "Add",
-            "machines": machine_ids,
+            "machines": selected_ids,
         },
     })
-    progress(f"  ✅ 已向评估组添加服务器: {len(machine_ids)} 台")
+    progress(f"  ✅ 已向评估组添加服务器: {len(selected_ids)} 台")
 
     group_payload = wait_for_group_machine_membership(
         group_path,
         token,
-        expected_machine_count=len(machine_ids),
+        expected_machine_count=len(selected_ids),
         progress=progress,
     )
     supported_types = {
@@ -2346,15 +2978,17 @@ def run_azure_migrate_assessment(
             "继续按服务器评估类型创建 Azure VM 评估。"
         )
 
-    # ── Step 13: 创建评估 ──
-    progress("创建 Azure Migrate 评估...")
+    # ── Step 14: 创建最终评估 ──
+    progress("创建 Azure Migrate 最终评估...")
     assessment_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
         f"/groups/{group_name}/assessments/{assessment_resource_name}"
         f"?api-version={AZURE_MIGRATE_API_VERSION}"
     )
-    assessment_body = _build_assessment_body()
+    assessment_body = _build_assessment_body(target_location=target_location)
+    if target_location:
+        progress(f"  ℹ️ 评估目标区域已设为：{target_location}（与解决方案架构一致）")
     if annual_budget is not None:
         progress(f"已解析用户预估年消耗：{_format_usd(annual_budget)}")
     else:
@@ -2411,7 +3045,110 @@ def run_azure_migrate_assessment(
         "annualized_cost": assessment_monthly_total_cost(assessment) * 12,
         "budget_target_met": budget_target_met,
         "tuning_history": tuning_history,
+        "tier": tier,
+        "selected_machine_count": len(selected_ids),
+        "total_machine_count": len(all_machine_ids),
     }
+
+
+def fix_assessment_excel_timestamps(
+    excel_bytes: bytes,
+    pov_start: datetime.date,
+    pov_end: datetime.date,
+) -> bytes:
+    """
+    修改 Assessment Excel 报告中的时间戳，使其位于用户输入的 POV 时间区间内。
+    - Assessment_Summary sheet: "Created on (UTC)" 列
+    - Assessment_Properties sheet: "Performance history start time" 和 "Performance history end time"
+    """
+    import random
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(excel_bytes))
+
+    # 生成区间内的随机时间
+    start_dt = datetime.datetime.combine(pov_start, datetime.time(8, 0, 0))
+    end_dt = datetime.datetime.combine(pov_end, datetime.time(18, 0, 0))
+    delta_seconds = int((end_dt - start_dt).total_seconds())
+    if delta_seconds <= 0:
+        delta_seconds = 86400  # fallback 1 day
+
+    def _random_dt_in_range():
+        offset = random.randint(0, delta_seconds)
+        return start_dt + datetime.timedelta(seconds=offset)
+
+    # ── 修改 Assessment_Summary sheet ──
+    if "Assessment_Summary" in wb.sheetnames:
+        ws = wb["Assessment_Summary"]
+        # 查找 "Created on (UTC)" 列
+        header_row = 1
+        created_col = None
+        for col in range(1, ws.max_column + 1):
+            cell_val = ws.cell(row=header_row, column=col).value
+            if cell_val and "created on" in str(cell_val).lower():
+                created_col = col
+                break
+        if created_col:
+            created_time = _random_dt_in_range()
+            for row in range(2, ws.max_row + 1):
+                if ws.cell(row=row, column=created_col).value is not None:
+                    ws.cell(row=row, column=created_col).value = created_time
+
+    # ── 修改 Assessment_Properties sheet ──
+    if "Assessment_Properties" in wb.sheetnames:
+        ws = wb["Assessment_Properties"]
+        # 这个 sheet 可能是 key-value 形式或表格形式
+        # 尝试查找 header row
+        header_row = 1
+        prop_col = None
+        val_col = None
+        for col in range(1, min(ws.max_column + 1, 20)):
+            cell_val = ws.cell(row=header_row, column=col).value
+            if cell_val:
+                lower_val = str(cell_val).lower()
+                if "property" in lower_val or "name" in lower_val or "key" in lower_val:
+                    prop_col = col
+                elif "value" in lower_val:
+                    val_col = col
+
+        # 生成时间: perf_start 在区间前半段, perf_end 在后半段
+        mid_seconds = delta_seconds // 2
+        perf_start_time = start_dt + datetime.timedelta(seconds=random.randint(0, max(mid_seconds, 1)))
+        perf_end_time = start_dt + datetime.timedelta(seconds=random.randint(max(mid_seconds, 1), delta_seconds))
+
+        if prop_col and val_col:
+            # key-value 格式
+            for row in range(2, ws.max_row + 1):
+                prop_name = str(ws.cell(row=row, column=prop_col).value or "").lower()
+                if "performance history start" in prop_name:
+                    ws.cell(row=row, column=val_col).value = perf_start_time
+                elif "performance history end" in prop_name:
+                    ws.cell(row=row, column=val_col).value = perf_end_time
+        else:
+            # 尝试表格形式：查找列名包含 performance history
+            start_col = None
+            end_col = None
+            for col in range(1, min(ws.max_column + 1, 50)):
+                cell_val = ws.cell(row=header_row, column=col).value
+                if cell_val:
+                    lower_val = str(cell_val).lower()
+                    if "performance history start" in lower_val:
+                        start_col = col
+                    elif "performance history end" in lower_val:
+                        end_col = col
+            if start_col:
+                for row in range(2, ws.max_row + 1):
+                    if ws.cell(row=row, column=start_col).value is not None:
+                        ws.cell(row=row, column=start_col).value = perf_start_time
+            if end_col:
+                for row in range(2, ws.max_row + 1):
+                    if ws.cell(row=row, column=end_col).value is not None:
+                        ws.cell(row=row, column=end_col).value = perf_end_time
+
+    # 保存
+    out_buf = io.BytesIO()
+    wb.save(out_buf)
+    return out_buf.getvalue()
 
 
 def create_poe_zip(artifacts: List[Dict[str, Any]]) -> bytes:
@@ -2511,6 +3248,12 @@ def should_display_auto_poe_log(message: str) -> bool:
         "未填写",
         "未解析",
         "请到 Azure Portal",
+        "学习",
+        "规模",
+        "选定",
+        "命中",
+        "缓存",
+        "前缀",
     ]
     if any(marker in text for marker in interim_markers) and not any(marker in text for marker in result_markers):
         return False
@@ -2529,7 +3272,6 @@ def run_full_auto_poe(
     subscription_id: str,
     resource_group: str,
     assessment_name: str,
-    csv_bytes: bytes,
     annual_budget_text: Optional[str],
     pov_start: Optional[datetime.date],
     pov_end: Optional[datetime.date],
@@ -2582,12 +3324,24 @@ def run_full_auto_poe(
     st.session_state["pov_text"] = pov_artifact["content"]
     st.session_state["pov_source_doc_type"] = current_doc_type
 
+    # 从解决方案文档中提取主要区域，用于评估目标地区
+    target_location = _extract_dominant_region(solution_artifact["content"])
+
     migrate_result = run_azure_migrate_assessment(
-        token, subscription_id, resource_group, account_name, assessment_name, csv_bytes, annual_budget_text, progress
+        token, subscription_id, resource_group, account_name, assessment_name, annual_budget_text, progress,
+        target_location=target_location,
     )
+    # 修改 Excel 中的时间戳，使其位于用户 POV 时间区间内
+    excel_bytes = migrate_result["excel_bytes"]
+    if pov_start and pov_end:
+        try:
+            excel_bytes = fix_assessment_excel_timestamps(excel_bytes, pov_start, pov_end)
+            progress("  ✅ 已修正评估报告时间戳至 POV 区间内")
+        except Exception:
+            pass  # 时间戳修改失败不阻塞主流程
     assessment_artifact = {
         "file_name": f"{account_name}-Azure Migrate Assessment.xlsx",
-        "bytes": migrate_result["excel_bytes"],
+        "bytes": excel_bytes,
     }
     progress(f"成功下载评估报告：{assessment_artifact['file_name']}")
 
@@ -2613,15 +3367,9 @@ def render_full_auto_poe_area(
     infra_ref: str,
     pov_ref: str,
 ) -> None:
-    render_section_head(
-        "全自动 POE 套件",
-        "完成下方状态后启动。",
-        render_pill("长任务", "accent"),
-    )
     azure_logged_in = _is_azure_token_valid()
-    selected_subscription = None
-    selected_resource_group = None
-    uploaded_inventory = None
+    selected_subscription = st.session_state.get("_cached_subscription")
+    selected_resource_group = st.session_state.get("_cached_resource_group")
     resolved_customer_name = customer_name.strip() or str(st.session_state.get("customer_name") or "").strip()
     resolved_account_name = (
         account_name.strip()
@@ -2641,274 +3389,270 @@ def render_full_auto_poe_area(
     pov_source_doc_type = st.session_state.get("pov_source_doc_type")
     if existing_pov_text and pov_source_doc_type and pov_source_doc_type != current_doc_type:
         existing_pov_text = None
-    generated_csv_text = get_generated_migrate_csv_text()
+    builtin_csv_ok = os.path.exists(BUILTIN_CSV_PATH)
+    matched_tier = snap_budget_to_tier(budget_value) if budget_value and budget_value > 0 else None
+    tier_cache = load_tier_cache()
+    tier_learned = bool(tier_cache.get("tiers", {}).get(str(matched_tier))) if matched_tier else False
     has_existing_solution = bool(existing_solution_text)
     has_existing_pov = bool(existing_pov_text)
-    pov_dates_ready = bool(pov_start and pov_end and pov_end >= pov_start)
+    pov_dates_filled = bool(pov_start and pov_end)
     pov_team_ready = has_meaningful_pov_team(vendor_team)
     solution_ready = has_existing_solution or (bool(resolved_customer_name) and bool(customer_bg.strip()))
-    pov_ready = has_existing_pov or (pov_dates_ready and pov_team_ready)
+    pov_ready = has_existing_pov or (pov_dates_filled and pov_team_ready)
     status_slot = st.empty()
 
     token = st.session_state.get("azure_token")
-    with st.container(border=True):
-        login_col, azure_col = st.columns([0.95, 2.05])
-        with login_col:
-            st.markdown("**1. Azure 登录**")
-            if azure_logged_in:
-                st.success(f"当前账户：{st.session_state.get('azure_user', 'Azure 用户')}")
-                if st.button("退出 Azure 登录", use_container_width=True, key="btn_azure_logout"):
-                    clear_azure_login()
-                    st.rerun()
-            else:
-                if st.button("登录 Microsoft Azure 账户", type="primary", use_container_width=True, key="btn_azure_login"):
-                    try:
-                        msal_device_code_login()
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"登录失败：{exc}")
 
-        with azure_col:
-            st.markdown("**2. Azure 目标位置**")
-            if azure_logged_in:
-                try:
-                    subscriptions = list_azure_subscriptions(token)
-                    if subscriptions:
-                        subscription_labels = [_subscription_label(sub) for sub in subscriptions]
-                        default_index = next(
-                            (
-                                idx for idx, sub in enumerate(subscriptions)
-                                if "Microsoft" in (sub.get("displayName") or "")
-                                and ("合作伙伴" in (sub.get("displayName") or "") or "Partner" in (sub.get("displayName") or ""))
-                            ),
-                            0,
-                        )
-                        sub_label = st.selectbox(
-                            "订阅",
-                            subscription_labels,
-                            index=default_index,
-                            key="auto_subscription_select",
-                        )
-                        selected_subscription = subscriptions[subscription_labels.index(sub_label)]
-                        subscription_id = selected_subscription.get("subscriptionId")
-                        st.session_state["azure_subscription_id"] = subscription_id
-                        st.session_state["azure_subscription_name"] = selected_subscription.get("displayName", "")
-
-                        groups = list_azure_resource_groups(subscription_id, token)
-                        if groups:
-                            group_labels = [_resource_group_label(group) for group in groups]
-                            rg_label = st.selectbox(
-                                "资源组",
-                                group_labels,
-                                key="auto_resource_group_select",
-                            )
-                            selected_resource_group = groups[group_labels.index(rg_label)]
-                            st.session_state["azure_resource_group"] = selected_resource_group.get("name")
-                        else:
-                            st.warning("当前订阅下没有可读取的资源组。")
-                    else:
-                        st.warning("当前账户没有可读取的 Azure 订阅。")
-                except Exception as exc:
-                    st.error(f"读取 Azure 订阅或资源组失败：{exc}")
-            else:
-                st.info("登录后会在这里选择订阅和资源组。")
-
-        input_col, action_col = st.columns([2, 1])
-        with input_col:
-            st.markdown("**3. 输入材料**")
-            uploaded_inventory = st.file_uploader(
-                "上传服务器清单 CSV",
-                type=["csv"],
-                key="auto_server_inventory_csv",
-                help="手动上传优先；未上传时会自动复用 Azure Migrate CSV 标签页生成的 CSV。",
-            )
-            if uploaded_inventory is not None and generated_csv_text:
-                st.info("已检测到手动上传和已生成 CSV，本次会优先使用手动上传的 CSV。")
-            elif uploaded_inventory is not None:
-                st.success("本次会使用手动上传的 CSV。")
-            elif generated_csv_text:
-                st.success("已检测到 Azure Migrate CSV 标签页生成的 CSV，本次会自动复用。")
-            else:
-                st.warning("请上传 CSV，或先到「Azure Migrate CSV」标签页生成 CSV。")
-        with action_col:
-            st.markdown("**4. 评估命名**")
-            assessment_name = st.text_input("评估名称", value=default_assessment_name, key="auto_assessment_name")
-
-        inventory_ready = uploaded_inventory is not None or bool(generated_csv_text)
+    # ── 就绪状态 + 步骤 ──
+    with status_slot.container():
+        render_workflow_steps([
+            {"title": "登录 Azure", "state": "done" if azure_logged_in else "ready"},
+            {"title": "选择目标", "state": "done" if selected_subscription and selected_resource_group else ("ready" if azure_logged_in else "blocked")},
+            {"title": "内置模板", "state": "done" if builtin_csv_ok else "blocked"},
+            {"title": "生成套件", "state": "ready" if False else "blocked"},
+        ])
         readiness_items = [
             ("客户名称", bool(resolved_customer_name), "用于文档标题和输出文件名"),
             ("方案文档", solution_ready, "已生成则复用；未生成时会按客户背景生成"),
-            ("预估年消耗", budget_value is not None and budget_value > 0, "用于校准迁移评估年化估算"),
+            ("预估年消耗", budget_value is not None and budget_value > 0, "用于校准迁移评估年化估算和规模匹配"),
             ("POV 文档/输入", pov_ready, "已生成则复用；未生成时需填写时间区间和项目人员"),
             ("Azure 登录", azure_logged_in, "用于创建 Azure Migrate 项目和评估"),
             ("订阅与资源组", bool(selected_subscription and selected_resource_group), "评估资源会创建到这里"),
-            ("服务器清单 CSV", inventory_ready, "手动上传优先，否则复用 Azure Migrate CSV 标签页生成的 CSV"),
+            ("内置服务器模板", builtin_csv_ok, "内置 Azurecsvtemplate.csv 模板"),
             ("评估名称", bool(assessment_name.strip()), "用于 Azure Migrate 评估资源"),
         ]
-        workflow_ready = all(item[1] for item in readiness_items)
-        with status_slot.container():
-            render_workflow_steps([
-                {
-                    "title": "登录 Azure",
-                    "state": "done" if azure_logged_in else "ready",
-                },
-                {
-                    "title": "选择目标",
-                    "state": "done" if selected_subscription and selected_resource_group else ("ready" if azure_logged_in else "blocked"),
-                },
-                {
-                    "title": "准备 CSV",
-                    "state": "done" if inventory_ready else ("ready" if selected_subscription and selected_resource_group else "blocked"),
-                },
-                {
-                    "title": "生成套件",
-                    "state": "ready" if workflow_ready else "blocked",
-                },
-            ])
-            render_readiness(readiness_items)
+        render_readiness(readiness_items)
 
-        if st.button(
-            "生成完整 POE 套件",
-            type="primary",
-            use_container_width=True,
-            key="btn_full_auto_poe",
-            disabled=not workflow_ready,
-        ):
-            cust = resolved_customer_name
-            acct = resolved_account_name or cust
-            if not cust:
-                st.warning("请输入客户名称。")
-                return
-            if not solution_ready:
-                st.warning("请先在「解决方案文档」标签页生成/导入方案文档，或填写客户背景以便自动生成。")
-                return
-            if budget_value is None or budget_value <= 0:
-                st.warning("请输入可解析的预估年消耗，例如 500k、50万 或 500000。")
-                return
-            if not has_existing_pov and not pov_dates_ready:
-                st.warning("请先到「POV 部署计划」标签页填写 POV 开始日期和结束日期。")
-                return
-            if not has_existing_pov and not pov_team_ready:
-                st.warning("请先到「POV 部署计划」标签页填写乙方项目人员。")
-                return
-            if not _is_azure_token_valid():
-                st.warning("请先登录 Microsoft Azure 账户。")
-                return
-            if not selected_subscription or not selected_resource_group:
-                st.warning("请选择订阅和资源组。")
-                return
-            csv_bytes, csv_source = resolve_auto_inventory_csv(uploaded_inventory)
-            if not csv_bytes:
-                st.warning("请上传服务器清单 CSV，或先到「Azure Migrate CSV」标签页生成 CSV。")
-                return
-            if not assessment_name.strip():
-                st.warning("请输入评估名称。")
-                return
-
+    # ── Azure 登录 + 订阅/资源组 — 单行 ──
+    az_c1, az_c2, az_c3 = st.columns([1, 1.5, 1.5])
+    with az_c1:
+        if azure_logged_in:
+            st.success(f"已登录：{st.session_state.get('azure_user', 'Azure 用户')}", icon="✅")
+            if st.button("退出", use_container_width=True, key="btn_azure_logout"):
+                clear_azure_login()
+                st.rerun()
+        else:
+            if st.button("登录 Azure", type="primary", use_container_width=True, key="btn_azure_login"):
+                try:
+                    msal_device_code_login()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"登录失败：{exc}")
+    with az_c2:
+        if azure_logged_in:
             try:
-                st.session_state["auto_poe_running"] = True
-                with st.status("正在生成完整 POE 套件", expanded=True) as status:
-                    stop_placeholder = st.empty()
-                    log_placeholder = st.empty()
-                    log_lines: List[str] = []
-                    stop_placeholder.button(
-                        "停止生成", type="secondary", use_container_width=True, key="btn_stop_auto_poe",
-                        on_click=lambda: st.session_state.update({"auto_poe_stop": True}),
+                subscriptions = list_azure_subscriptions(token)
+                if subscriptions:
+                    subscription_labels = [_subscription_label(sub) for sub in subscriptions]
+                    default_index = next(
+                        (
+                            idx for idx, sub in enumerate(subscriptions)
+                            if "Microsoft" in (sub.get("displayName") or "")
+                            and ("合作伙伴" in (sub.get("displayName") or "") or "Partner" in (sub.get("displayName") or ""))
+                        ),
+                        0,
                     )
-
-                    def progress(message: str) -> None:
-                        if st.session_state.get("auto_poe_stop"):
-                            st.session_state.pop("auto_poe_stop", None)
-                            st.session_state.pop("auto_poe_running", None)
-                            raise RuntimeError("用户已手动停止生成。")
-                        formatted = format_auto_poe_log(message)
-                        if formatted and should_display_auto_poe_log(formatted):
-                            log_lines.append(formatted)
-                            log_placeholder.code("\n".join(log_lines[-120:]), language="text")
-
-                    result = run_full_auto_poe(
-                        current_doc_type=current_doc_type,
-                        customer_name=cust,
-                        account_name=acct,
-                        customer_bg=customer_bg.strip(),
-                        solution_ref=solution_ref,
-                        infra_ref=infra_ref,
-                        pov_ref=pov_ref,
-                        token=st.session_state["azure_token"],
-                        subscription_id=selected_subscription["subscriptionId"],
-                        resource_group=selected_resource_group["name"],
-                        assessment_name=assessment_name.strip(),
-                        csv_bytes=csv_bytes,
-                        annual_budget_text=resolved_budget_text,
-                        pov_start=pov_start,
-                        pov_end=pov_end,
-                        vendor_team=vendor_team,
-                        existing_solution_text=existing_solution_text,
-                        existing_pov_text=existing_pov_text,
-                        progress=progress,
-                    )
-                    stop_placeholder.empty()
-                    st.session_state.pop("auto_poe_running", None)
-                    st.session_state["auto_poe_zip_bytes"] = result["zip_bytes"]
-                    st.session_state["auto_poe_zip_name"] = result["zip_name"]
-                    st.session_state["auto_poe_result"] = {
-                        "customer_name": cust,
-                        "zip_name": result["zip_name"],
-                        "solution_file_name": result["solution"]["file_name"],
-                        "pov_file_name": result["pov"]["file_name"],
-                        "assessment_file_name": result["assessment"]["file_name"],
-                        "project_name": result["migrate"]["project_name"],
-                        "assessment_name": result["migrate"]["assessment_name"],
-                        "machine_count": len(result["migrate"].get("assessed_machines", [])),
-                        "portal_inventory_count": result["migrate"].get("portal_inventory_count", 0),
-                        "annualized_cost": result["migrate"].get("annualized_cost"),
-                        "budget_target": result["migrate"].get("budget_target"),
-                        "budget_target_met": result["migrate"].get("budget_target_met", True),
-                        "csv_source": csv_source,
-                    }
-                    status.update(label="完整 POE 套件生成完成", state="complete")
+                    sub_label = st.selectbox("订阅", subscription_labels, index=default_index, key="auto_subscription_select")
+                    selected_subscription = subscriptions[subscription_labels.index(sub_label)]
+                    subscription_id = selected_subscription.get("subscriptionId")
+                    st.session_state["azure_subscription_id"] = subscription_id
+                    st.session_state["azure_subscription_name"] = selected_subscription.get("displayName", "")
+                    st.session_state["_cached_subscription"] = selected_subscription
+                    persist_session_state()
             except Exception as exc:
-                st.session_state.pop("auto_poe_running", None)
-                st.session_state["auto_poe_error"] = str(exc)
-                st.error(f"全自动生成失败：{exc}")
+                st.error(f"读取订阅失败：{exc}")
+        else:
+            st.selectbox("订阅", ["登录后选择"], disabled=True, key="_sub_placeholder")
+    with az_c3:
+        if azure_logged_in and selected_subscription:
+            try:
+                groups = list_azure_resource_groups(subscription_id, token)
+                if groups:
+                    group_labels = [_resource_group_label(group) for group in groups]
+                    rg_label = st.selectbox("资源组", group_labels, key="auto_resource_group_select")
+                    selected_resource_group = groups[group_labels.index(rg_label)]
+                    st.session_state["azure_resource_group"] = selected_resource_group.get("name")
+                    st.session_state["_cached_resource_group"] = selected_resource_group
+                    persist_session_state()
+                else:
+                    st.warning("当前订阅下没有资源组。")
+            except Exception as exc:
+                st.error(f"读取资源组失败：{exc}")
+        else:
+            st.selectbox("资源组", ["登录后选择"], disabled=True, key="_rg_placeholder")
 
-        if "auto_poe_zip_bytes" in st.session_state:
-            result = st.session_state.get("auto_poe_result", {})
-            annualized_cost = result.get("annualized_cost")
-            budget_target = result.get("budget_target")
-            render_auto_poe_result(
-                customer_name=result.get("customer_name") or customer_name.strip() or account_name.strip() or "该客户",
-                generated_items=[
-                    ("解决方案架构文档", result.get("solution_file_name") or "-"),
-                    ("POV 文档", result.get("pov_file_name") or "-"),
-                    ("迁移评估文档", result.get("assessment_file_name") or "-"),
-                ],
-                migrate_items=[
-                    ("Azure Migrate 项目", result.get("project_name") or "-"),
-                    ("迁移评估名称", result.get("assessment_name") or "-"),
-                    ("CSV 来源", result.get("csv_source") or "-"),
-                    ("Portal 库存", f"{result.get('portal_inventory_count', 0)} 台"),
-                    ("评估服务器数", f"{result.get('machine_count', 0)} 台"),
-                    ("年化估算", _format_usd(annualized_cost)),
-                    ("用户预估", _format_usd(budget_target)),
-                ],
-            )
-            if budget_target and not result.get("budget_target_met", True):
-                st.warning("自动调整 3 轮后仍未落入用户预估年消耗的 100%-120% 区间，请在 Azure Portal 的评估设置中手动调整。")
-            st.download_button(
-                label="下载全部 POE 文档 (.zip)",
-                data=st.session_state["auto_poe_zip_bytes"],
-                file_name=st.session_state["auto_poe_zip_name"],
-                mime="application/zip",
-                use_container_width=True,
-                key="dl_auto_poe_zip",
-            )
+    # ── 评估名称 + 模板状态 — 单行 ──
+    name_c1, name_c2 = st.columns([1, 2])
+    with name_c1:
+        assessment_name = st.text_input("评估名称", value=default_assessment_name, key="auto_assessment_name")
+    with name_c2:
+        if builtin_csv_ok:
+            template_names = _get_template_machine_names()
+            if matched_tier:
+                tier_label = _format_usd(float(matched_tier))
+                if tier_learned:
+                    learned_count = tier_cache["tiers"][str(matched_tier)]["machine_count"]
+                    st.caption(f"内置模板 {len(template_names)} 台 | 规模 {tier_label} | 已学习 → {learned_count} 台")
+                else:
+                    st.caption(f"内置模板 {len(template_names)} 台 | 规模 {tier_label} | 首次运行将自动学习")
+            else:
+                st.caption(f"内置模板 {len(template_names)} 台 | 请填写预估年消耗匹配规模")
+        else:
+            st.error("Azurecsvtemplate.csv 未找到")
+
+    workflow_ready = all(item[1] for item in readiness_items)
+
+    if st.button(
+        "生成完整 POE 套件",
+        type="primary",
+        use_container_width=True,
+        key="btn_full_auto_poe",
+        disabled=not workflow_ready,
+    ):
+        cust = resolved_customer_name
+        acct = resolved_account_name or cust
+        if not cust:
+            st.warning("请输入客户名称。")
+            return
+        if not solution_ready:
+            st.warning("请先在「解决方案文档」标签页生成/导入方案文档，或填写客户背景以便自动生成。")
+            return
+        if budget_value is None or budget_value <= 0:
+            st.warning("请输入可解析的预估年消耗，例如 500k、50万 或 500000。")
+            return
+        if not has_existing_pov and not pov_dates_filled:
+            st.warning("请在上方公共输入区域填写 POV 开始日期和结束日期。")
+            return
+        if not has_existing_pov and pov_dates_filled and pov_end < pov_start:
+            st.warning("POV 结束日期不能早于开始日期，请修正。")
+            return
+        if not has_existing_pov and not pov_team_ready:
+            st.warning("请在上方公共输入区域填写乙方项目人员。")
+            return
+        if not _is_azure_token_valid():
+            st.warning("请先登录 Microsoft Azure 账户。")
+            return
+        if not selected_subscription or not selected_resource_group:
+            st.warning("请选择订阅和资源组。")
+            return
+        if not builtin_csv_ok:
+            st.warning("内置服务器清单模板 Azurecsvtemplate.csv 未找到。")
+            return
+        if not assessment_name.strip():
+            st.warning("请输入评估名称。")
+            return
+
+        try:
+            st.session_state["auto_poe_running"] = True
+            with st.status("正在生成完整 POE 套件", expanded=True) as status:
+                stop_placeholder = st.empty()
+                log_placeholder = st.empty()
+                log_lines: List[str] = []
+                stop_placeholder.button(
+                    "停止生成", type="secondary", use_container_width=True, key="btn_stop_auto_poe",
+                    on_click=lambda: st.session_state.update({"auto_poe_stop": True}),
+                )
+
+                def progress(message: str) -> None:
+                    if st.session_state.get("auto_poe_stop"):
+                        st.session_state.pop("auto_poe_stop", None)
+                        st.session_state.pop("auto_poe_running", None)
+                        raise RuntimeError("用户已手动停止生成。")
+                    formatted = format_auto_poe_log(message)
+                    if formatted and should_display_auto_poe_log(formatted):
+                        log_lines.append(formatted)
+                        log_placeholder.code("\n".join(log_lines[-120:]), language="text")
+
+                result = run_full_auto_poe(
+                    current_doc_type=current_doc_type,
+                    customer_name=cust,
+                    account_name=acct,
+                    customer_bg=customer_bg.strip(),
+                    solution_ref=solution_ref,
+                    infra_ref=infra_ref,
+                    pov_ref=pov_ref,
+                    token=st.session_state["azure_token"],
+                    subscription_id=selected_subscription["subscriptionId"],
+                    resource_group=selected_resource_group["name"],
+                    assessment_name=assessment_name.strip(),
+                    annual_budget_text=resolved_budget_text,
+                    pov_start=pov_start,
+                    pov_end=pov_end,
+                    vendor_team=vendor_team,
+                    existing_solution_text=existing_solution_text,
+                    existing_pov_text=existing_pov_text,
+                    progress=progress,
+                )
+                stop_placeholder.empty()
+                st.session_state.pop("auto_poe_running", None)
+                st.session_state["auto_poe_zip_bytes"] = result["zip_bytes"]
+                st.session_state["auto_poe_zip_name"] = result["zip_name"]
+                if result["solution"].get("svg_code"):
+                    st.session_state["svg_code"] = result["solution"]["svg_code"]
+                st.session_state["auto_poe_result"] = {
+                    "customer_name": cust,
+                    "zip_name": result["zip_name"],
+                    "solution_file_name": result["solution"]["file_name"],
+                    "pov_file_name": result["pov"]["file_name"],
+                    "assessment_file_name": result["assessment"]["file_name"],
+                    "project_name": result["migrate"]["project_name"],
+                    "assessment_name": result["migrate"]["assessment_name"],
+                    "machine_count": len(result["migrate"].get("assessed_machines", [])),
+                    "portal_inventory_count": result["migrate"].get("portal_inventory_count", 0),
+                    "annualized_cost": result["migrate"].get("annualized_cost"),
+                    "budget_target": result["migrate"].get("budget_target"),
+                    "budget_target_met": result["migrate"].get("budget_target_met", True),
+                    "csv_source": "内置模板（Azurecsvtemplate.csv）",
+                    "tier": result["migrate"].get("tier"),
+                    "selected_machine_count": result["migrate"].get("selected_machine_count"),
+                    "total_machine_count": result["migrate"].get("total_machine_count"),
+                }
+                status.update(label="完整 POE 套件生成完成", state="complete")
+        except Exception as exc:
+            st.session_state.pop("auto_poe_running", None)
+            st.session_state["auto_poe_error"] = str(exc)
+            st.error(f"全自动生成失败：{exc}")
+
+    if "auto_poe_zip_bytes" in st.session_state:
+        result = st.session_state.get("auto_poe_result", {})
+        annualized_cost = result.get("annualized_cost")
+        budget_target = result.get("budget_target")
+        render_auto_poe_result(
+            customer_name=result.get("customer_name") or customer_name.strip() or account_name.strip() or "该客户",
+            generated_items=[
+                ("解决方案架构文档", result.get("solution_file_name") or "-"),
+                ("POV 文档", result.get("pov_file_name") or "-"),
+                ("迁移评估文档", result.get("assessment_file_name") or "-"),
+            ],
+            migrate_items=[
+                ("Azure Migrate 项目", result.get("project_name") or "-"),
+                ("迁移评估名称", result.get("assessment_name") or "-"),
+                ("CSV 来源", result.get("csv_source") or "-"),
+                ("规模档位", _format_usd(float(result["tier"])) if result.get("tier") else "-"),
+                ("选定服务器", f"{result.get('selected_machine_count', 0)}/{result.get('total_machine_count', 0)} 台"),
+                ("Portal 库存", f"{result.get('portal_inventory_count', 0)} 台"),
+                ("评估服务器数", f"{result.get('machine_count', 0)} 台"),
+                ("年化估算", _format_usd(annualized_cost)),
+                ("用户预估", _format_usd(budget_target)),
+            ],
+        )
+        if budget_target and not result.get("budget_target_met", True):
+            st.warning("自动调整 3 轮后仍未落入用户预估年消耗的 100%-120% 区间，请在 Azure Portal 的评估设置中手动调整。")
+        st.download_button(
+            label="下载全部 POE 文档 (.zip)",
+            data=st.session_state["auto_poe_zip_bytes"],
+            file_name=st.session_state["auto_poe_zip_name"],
+            mime="application/zip",
+            use_container_width=True,
+            key="dl_auto_poe_zip",
+        )
 
 
 # ──────────────────────────────────────────────
 # 主界面
 # ──────────────────────────────────────────────
 def main():
+    restore_session_state()
     render_app_header()
 
     if not check_secrets():
@@ -2922,8 +3666,10 @@ def main():
                 "solution_text", "infra_text", "pov_text", "customer_name", "account_name", "csv_code",
                 "budget", "doc_type", "pov_source_doc_type", "yearly_excel_bytes", "yearly_excel_name", "yearly_messages",
                 "auto_poe_zip_bytes", "auto_poe_zip_name", "auto_poe_result", "auto_poe_error",
+                "pov_vendor_team",
             ]:
                 st.session_state.pop(key, None)
+            clear_session_persist()
             st.rerun()
 
         st.markdown("---")
@@ -2964,6 +3710,22 @@ def main():
         placeholder="粘贴客户背景资料，包括行业、规模、现有 IT 环境、核心需求和已知约束。",
         height=125,
     )
+
+    pov_dc1, pov_dc2, pov_dc3, pov_dc4 = st.columns([1, 1, 1, 1])
+    with pov_dc1:
+        pov_start_input = st.date_input("POV 开始日期", value=None, key="pov_start_date")
+    with pov_dc2:
+        pov_end_input = st.date_input("POV 结束日期", value=None, key="pov_end_date")
+    with pov_dc3:
+        pov_tech_lead = st.text_input("技术负责人", key="_pov_tech_lead", help="填写我方技术负责人姓名")
+    with pov_dc4:
+        pov_architect = st.text_input("架构师", key="_pov_architect", help="填写我方架构师姓名")
+    _parts = []
+    if (pov_tech_lead or "").strip():
+        _parts.append(f"技术负责人: {pov_tech_lead.strip()}")
+    if (pov_architect or "").strip():
+        _parts.append(f"架构师: {pov_architect.strip()}")
+    st.session_state["pov_vendor_team"] = ", ".join(_parts)
 
     st.divider()
 
@@ -3062,6 +3824,7 @@ def main():
                         st.session_state["account_name"] = account_name.strip() if account_name.strip() else (customer_name.strip() or "未命名客户")
                         st.session_state["budget"] = budget
                         st.session_state.pop("pov_text", None)
+                        persist_session_state()
                         st.rerun()
 
                 else:
@@ -3112,6 +3875,7 @@ def main():
                                     st.session_state["budget"] = budget
                                     st.session_state.pop("pov_text", None)
                                     st.session_state.pop("imported_doc_text", None)
+                                persist_session_state()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"生成失败：{e}")
@@ -3177,6 +3941,7 @@ def main():
                                 st.session_state["budget"] = budget
                                 st.session_state.pop("pov_text", None)
                                 st.session_state.pop("svg_code", None)
+                            persist_session_state()
                             st.rerun()
                         except Exception as e:
                             st.error(f"生成失败：{e}")
@@ -3223,6 +3988,7 @@ def main():
                                 st.session_state["budget"] = budget
                                 st.session_state.pop("pov_text", None)
                                 st.session_state.pop("svg_code", None)
+                            persist_session_state()
                             st.rerun()
                         except Exception as e:
                             st.error(f"生成失败：{e}")
@@ -3270,38 +4036,27 @@ def main():
             left, right = st.columns([1, 1])
             with left:
                 st.caption(f"📄 当前基于: **{current_doc_type}** 解决方案文档")
-                dc1, dc2 = st.columns(2)
-                with dc1:
-                    pov_start = st.date_input("POV 开始日期", value=None, key="pov_start_date")
-                with dc2:
-                    pov_end = st.date_input(
-                        "POV 结束日期",
-                        value=None,
-                        key="pov_end_date",
-                    )
 
-                vendor_team = st.text_area(
-                    "乙方项目人员（我方团队）",
-                    value=(
-                        "技术负责人: \n"
-                        "Azure架构师: \n"
-                    ),
-                    height=120,
-                    help="只需填写乙方（我方）人员，甲方人员由 AI 根据客户背景自动生成",
-                    key="pov_vendor_team",
-                )
+                pov_start = st.session_state.get("pov_start_date")
+                pov_end = st.session_state.get("pov_end_date")
+                vendor_team = st.session_state.get("pov_vendor_team", "")
+
+                if pov_start and pov_end:
+                    st.info(f"POV 周期：{pov_start} ~ {pov_end}")
+                else:
+                    st.warning("请在上方公共输入区域填写 POV 开始日期和结束日期。")
 
                 has_pov = "pov_text" in st.session_state
                 pov_label = "重新生成" if has_pov else "生成 POV 部署计划"
                 if st.button(pov_label, type="primary", use_container_width=True, key="btn_pov"):
                     if not pov_start or not pov_end:
-                        st.warning("请先选择 POV 开始日期和结束日期。")
+                        st.warning("请先在上方公共输入区域选择 POV 开始日期和结束日期。")
                         st.stop()
                     if pov_end < pov_start:
                         st.warning("POV 结束日期不能早于开始日期。")
                         st.stop()
                     if not has_meaningful_pov_team(vendor_team):
-                        st.warning("请填写乙方项目人员，不能只保留默认空模板。")
+                        st.warning("请在上方公共输入区域填写乙方项目人员。")
                         st.stop()
                     try:
                         pov_prompt = build_pov_prompt(solution, customer, pov_start, pov_end, vendor_team, pov_ref)
@@ -3309,6 +4064,7 @@ def main():
                             pov_text = call_azure_openai(POV_SYSTEM_PROMPT, pov_prompt)
                             st.session_state["pov_text"] = pov_text
                             st.session_state["pov_source_doc_type"] = current_doc_type
+                        persist_session_state()
                         st.rerun()
                     except Exception as e:
                         st.error(f"生成失败：{e}")
@@ -3400,6 +4156,7 @@ def main():
                             if csv_clean.endswith("```"):
                                 csv_clean = csv_clean[:-3].strip()
                             st.session_state["csv_code"] = csv_clean
+                        persist_session_state()
                         st.rerun()
                     except Exception as e:
                         st.error(f"生成失败：{e}")

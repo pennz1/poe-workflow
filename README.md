@@ -217,3 +217,71 @@ A: 文件名格式为 `MMDD-客户名称-文档类型.扩展名`，例如：`022
 | `python-docx` | ≥ 1.1.0 | Word 文档生成 |
 | `openpyxl` | ≥ 3.1.0 | 读取 Excel 价格估算表 |
 | `pandas` | ≥ 2.0.0 | CSV 预览表格渲染 |
+
+---
+
+## Azure App Service 部署
+
+本项目支持一键部署到 Azure App Service（East Asia），实现更快的访问速度和页面状态持久化。
+
+### 快速部署（az CLI）
+
+```bash
+# 登录 Azure
+az login
+
+# 一键部署到 East Asia（香港）
+az webapp up \
+    --name poe-workflow \
+    --resource-group <your-resource-group> \
+    --runtime "PYTHON:3.11" \
+    --location eastasia \
+    --sku B1
+
+# 配置启动命令
+az webapp config set \
+    --name poe-workflow \
+    --resource-group <your-resource-group> \
+    --startup-file "bash startup.sh"
+
+# 配置环境变量（Application Settings）
+az webapp config appsettings set \
+    --name poe-workflow \
+    --resource-group <your-resource-group> \
+    --settings \
+        AZURE_OPENAI_KEY="your-api-key" \
+        AZURE_OPENAI_ENDPOINT="https://your-gateway.example.com/" \
+        AZURE_OPENAI_DEPLOYMENT="gpt-4o" \
+        PERSIST_DIR="/home/poe-data/"
+
+# 启用 Always On（避免冷启动）
+az webapp config set \
+    --name poe-workflow \
+    --resource-group <your-resource-group> \
+    --always-on true
+```
+
+### GitHub Actions CI/CD
+
+1. 在 Azure Portal 下载 App Service 的 **Publish Profile**
+2. 在 GitHub repo → Settings → Secrets → 添加 `AZURE_WEBAPP_PUBLISH_PROFILE`
+3. Push to `main` 分支自动触发部署
+
+### 环境变量说明
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `AZURE_OPENAI_KEY` | ✅ | OpenAI API 密钥 |
+| `AZURE_OPENAI_ENDPOINT` | ✅ | API 端点 URL |
+| `AZURE_OPENAI_DEPLOYMENT` | ✅ | 模型部署名称 |
+| `MSAL_CLIENT_ID` | 可选 | MSAL Public Client ID（有默认值） |
+| `PERSIST_DIR` | 可选 | 持久化目录，App Service 设为 `/home/poe-data/` |
+
+### 页面状态持久化
+
+部署后，以下状态会跨页面刷新保留（除非主动点击「清除所有结果」）：
+
+- 客户信息（名称、账户名、预算）
+- Azure 登录状态和订阅/资源组选择
+- 已生成的文档内容（解决方案、POV、CSV）
+- 最多支持 5 人同时使用（per-session 文件隔离），旧 session 24 小时自动清理
