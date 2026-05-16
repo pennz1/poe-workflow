@@ -90,10 +90,26 @@ class TestPrefixCsvServerNames(unittest.TestCase):
         # Header should be unchanged
         self.assertEqual(lines[0], "*Server name,IP addresses,*Cores,*Memory (In MB),*OS name")
 
-        # Each server name should get the prefix prepended
-        self.assertTrue(lines[1].startswith("contoso-VM1,"))
-        self.assertTrue(lines[2].startswith("contoso-VM2,"))
-        self.assertTrue(lines[3].startswith("contoso-VM3,"))
+        # Each server name should get the prefix prepended and contain VM with randomized number
+        self.assertTrue(lines[1].startswith("contoso-VM"))
+        self.assertTrue(lines[2].startswith("contoso-VM"))
+        self.assertTrue(lines[3].startswith("contoso-VM"))
+
+        # Numbers should be randomized (not 1,2,3) but deterministic
+        name1 = lines[1].split(",")[0]
+        name2 = lines[2].split(",")[0]
+        name3 = lines[3].split(",")[0]
+        # All names should be different
+        self.assertEqual(len({name1, name2, name3}), 3)
+
+        # Same prefix produces same result (deterministic)
+        result2 = prefix_csv_server_names(csv_text, "contoso")
+        self.assertEqual(result, result2)
+
+        # Different prefix produces different numbers
+        result3 = prefix_csv_server_names(csv_text, "fabrikam")
+        lines3 = result3.strip().split("\n")
+        self.assertNotEqual(lines[1].split(",")[0], lines3[1].split(",")[0])
 
     def test_rest_of_csv_unchanged(self):
         csv_text = (
@@ -344,6 +360,27 @@ class TestGetMachineIdsForTier(unittest.TestCase):
         ]
         result = get_machine_ids_for_tier(15000, machines, "x", {})
         self.assertEqual(result, ["id1"])
+
+    def test_fallback_count_when_names_mismatch(self):
+        """When cached names don't match, should fall back to selecting by count."""
+        machines = [
+            {"id": "id1", "properties": {"displayName": "test-pro-VM501"}},
+            {"id": "id2", "properties": {"displayName": "test-pro-VM502"}},
+            {"id": "id3", "properties": {"displayName": "test-pro-VM503"}},
+        ]
+        cache = {
+            "tiers": {
+                "15000": {
+                    "machine_names": ["pro-VM1", "pro-VM2"],  # old names, won't match
+                    "machine_count": 2,
+                    "expected_monthly": 500.0,
+                    "expected_annual": 6000.0,
+                }
+            }
+        }
+        result = get_machine_ids_for_tier(15000, machines, "test", cache)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result, ["id1", "id2"])
 
 
 class TestLoadSaveTierCache(unittest.TestCase):

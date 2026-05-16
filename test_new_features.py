@@ -6,18 +6,25 @@ import sys
 import os
 import importlib
 
-# Ensure real modules are used (test_tier_algorithm.py may mock them at module level)
-_mocked_prefixes = ("docx", "openai", "streamlit", "msal")
-for mod_name in list(sys.modules.keys()):
-    if any(mod_name == p or mod_name.startswith(p + ".") for p in _mocked_prefixes):
-        if hasattr(sys.modules[mod_name], '_mock_name') or hasattr(sys.modules[mod_name], '_mock_children'):
-            del sys.modules[mod_name]
-
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Force re-import of app if it was imported with mocked dependencies
-if "app" in sys.modules:
-    importlib.reload(sys.modules["app"])
+
+def _ensure_real_modules():
+    """Remove mocked modules from sys.modules and reload app with real deps."""
+    _mocked_prefixes = ("docx", "openai", "streamlit", "msal", "requests")
+    removed = False
+    for mod_name in list(sys.modules.keys()):
+        mod = sys.modules[mod_name]
+        if any(mod_name == p or mod_name.startswith(p + ".") for p in _mocked_prefixes):
+            if hasattr(mod, '_mock_name') or hasattr(mod, '_mock_children'):
+                del sys.modules[mod_name]
+                removed = True
+    if removed and "app" in sys.modules:
+        importlib.reload(sys.modules["app"])
+
+
+# Run cleanup at import time
+_ensure_real_modules()
 
 
 def test_extract_svg_from_code_block():
@@ -79,15 +86,15 @@ def test_fix_assessment_excel_timestamps():
     ws1["A1"] = "Name"
     ws1["B1"] = "Created on (UTC)"
     ws1["A2"] = "Test"
-    ws1["B2"] = datetime.datetime(2020, 1, 1)
+    ws1["B2"] = datetime.datetime(2020, 1, 1, 2, 35, 35)
 
     ws2 = wb.create_sheet("Assessment_Properties")
     ws2["A1"] = "Property Name"
     ws2["B1"] = "Value"
     ws2["A2"] = "Performance history start time"
-    ws2["B2"] = datetime.datetime(2020, 1, 1)
+    ws2["B2"] = datetime.datetime(2020, 1, 1, 2, 35, 35)
     ws2["A3"] = "Performance history end time"
-    ws2["B3"] = datetime.datetime(2020, 1, 31)
+    ws2["B3"] = datetime.datetime(2020, 1, 31, 2, 35, 35)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -98,14 +105,20 @@ def test_fix_assessment_excel_timestamps():
     fixed = fix_assessment_excel_timestamps(excel_bytes, pov_start, pov_end)
 
     wb2 = load_workbook(io.BytesIO(fixed))
+    # Values should now be plain text like "3/5/2025 2:35:35 AM"
     created = wb2["Assessment_Summary"]["B2"].value
-    assert pov_start <= created.date() <= pov_end
+    assert isinstance(created, str), f"Expected str, got {type(created)}: {created}"
+    assert "/2025" in created
+    assert "2:35:35 AM" in created
 
     perf_start = wb2["Assessment_Properties"]["B2"].value
     perf_end = wb2["Assessment_Properties"]["B3"].value
-    assert pov_start <= perf_start.date() <= pov_end
-    assert pov_start <= perf_end.date() <= pov_end
-    assert perf_start <= perf_end
+    assert isinstance(perf_start, str), f"Expected str, got {type(perf_start)}"
+    assert isinstance(perf_end, str), f"Expected str, got {type(perf_end)}"
+    # Performance history start = Created on (UTC)
+    assert perf_start == created
+    # Performance history end should be +1 day from start, same time
+    assert "2:35:35 AM" in perf_end
 
 
 def test_solution_prompt_uses_latest_models():
@@ -126,6 +139,7 @@ def test_pov_prompt_uses_latest_models():
 
 
 def test_create_solution_docx_with_svg():
+    _ensure_real_modules()
     from app import create_solution_docx
     # Create a minimal PNG (1x1 white pixel)
     import struct
@@ -152,8 +166,11 @@ def test_create_solution_docx_with_svg():
         "## 二、解决方案架构概览\nArchitecture\n"
         "## 三、技术实现\nDetails\n"
     )
+    svg_code = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="red"/></svg>'
+    # Mock _svg_to_png_bytes to avoid Edge dependency in tests
     png_bytes = _make_minimal_png()
-    docx_bytes = create_solution_docx(content, "TestCo", svg_png_bytes=png_bytes)
+    with unittest.mock.patch('app._svg_to_png_bytes', return_value=png_bytes):
+        docx_bytes = create_solution_docx(content, "TestCo", svg_code=svg_code)
     assert len(docx_bytes) > 0
     # Verify it's a valid docx (ZIP)
     import zipfile

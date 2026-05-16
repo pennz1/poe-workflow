@@ -484,12 +484,12 @@ def generate_svg_architecture(solution_text: str, customer_name: str) -> Optiona
 
 
 def _svg_to_png_bytes(svg_code: str) -> Optional[bytes]:
-    """将 SVG 字符串转换为 PNG 字节。优先使用 cairosvg，备选使用 svglib+reportlab。"""
+    """将 SVG 字符串转换为 PNG 字节。优先 cairosvg → svglib → Edge headless。"""
     try:
         import cairosvg
         png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"), output_width=1200)
         return png_bytes
-    except ImportError:
+    except (ImportError, OSError):
         pass
     try:
         from svglib.svglib import svg2rlg
@@ -503,9 +503,210 @@ def _svg_to_png_bytes(svg_code: str) -> Optional[bytes]:
         if drawing:
             png_bytes = renderPM.drawToString(drawing, fmt="PNG")
             return png_bytes
-    except ImportError:
+    except (ImportError, OSError):
         pass
+    # 最后尝试使用 Edge 浏览器 headless 模式渲染
+    return _svg_to_png_via_edge(svg_code)
+
+
+def _svg_to_png_via_edge(svg_code: str) -> Optional[bytes]:
+    """使用 Edge 浏览器 headless 模式将 SVG 渲染为 PNG。"""
+    import subprocess
+    import tempfile
+
+    edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    edge_exe = None
+    for p in edge_paths:
+        if os.path.exists(p):
+            edge_exe = p
+            break
+    if not edge_exe:
+        return None
+
+    # 解析 viewBox 确定合适的窗口尺寸
+    vb_match = re.search(r'viewBox\s*=\s*"([^"]*)"', svg_code)
+    if vb_match:
+        parts = vb_match.group(1).split()
+        if len(parts) == 4:
+            vb_w, vb_h = int(float(parts[2])), int(float(parts[3]))
+        else:
+            vb_w, vb_h = 1200, 800
+    else:
+        vb_w, vb_h = 1200, 800
+
+    # 确保 SVG 填满整个页面
+    html = (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        '<style>*{margin:0;padding:0}body{background:white}'
+        'svg{display:block;width:100vw;height:100vh}</style></head>'
+        f'<body>{svg_code}</body></html>'
+    )
+
+    tmp_html = tempfile.mktemp(suffix=".html")
+    tmp_png = tempfile.mktemp(suffix=".png")
+    tmp_user_data = tempfile.mkdtemp(prefix="edge_svg_")
+    try:
+        with open(tmp_html, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        file_url = "file:///" + tmp_html.replace("\\", "/")
+        result = subprocess.run(
+            [
+                edge_exe,
+                "--headless",
+                "--disable-gpu",
+                "--no-sandbox",
+                f"--screenshot={tmp_png}",
+                f"--window-size={vb_w},{vb_h}",
+                "--default-background-color=00000000",
+                "--hide-scrollbars",
+                f"--user-data-dir={tmp_user_data}",
+                file_url,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if os.path.exists(tmp_png) and os.path.getsize(tmp_png) > 0:
+            with open(tmp_png, "rb") as f:
+                return f.read()
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    finally:
+        for p in (tmp_html, tmp_png):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        try:
+            import shutil
+            shutil.rmtree(tmp_user_data, ignore_errors=True)
+        except Exception:
+            pass
     return None
+
+
+def _add_svg_image_to_doc(doc, svg_code: str, width_cm: float = 16) -> bool:
+    """
+    将 SVG 直接插入到 Word 文档。
+    优先转为 PNG 插入（兼容性最好），若无法转换则通过 docx XML 直接嵌入 SVG。
+    返回 True 如果成功插入。
+    """
+    from docx.oxml.ns import qn as _qn
+    from docx.oxml import OxmlElement
+
+    # 先尝试 PNG 转换
+    png_bytes = _svg_to_png_bytes(svg_code)
+    if png_bytes:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(io.BytesIO(png_bytes), width=Cm(width_cm))
+        return True
+
+    # PNG 转换失败，直接嵌入 SVG 为 docx image part（Word 365+ 支持）
+    try:
+        from docx.opc.part import Part as OpcPart
+        from docx.opc.packuri import PackURI
+
+        svg_bytes = svg_code.encode("utf-8")
+        # 提取 viewBox 尺寸来计算比例
+        vb_match = re.search(r'viewBox\s*=\s*"([^"]*)"', svg_code)
+        if vb_match:
+            parts = vb_match.group(1).split()
+            if len(parts) == 4:
+                vb_w, vb_h = float(parts[2]), float(parts[3])
+            else:
+                vb_w, vb_h = 1200, 800
+        else:
+            vb_w, vb_h = 1200, 800
+
+        width_emu = int(width_cm * 360000)  # cm to EMU
+        height_emu = int(width_emu * vb_h / max(vb_w, 1))
+
+        # 添加 SVG 作为 image part
+        part = doc.part
+        svg_part = OpcPart(
+            PackURI("/word/media/architecture.svg"),
+            "image/svg+xml",
+            svg_bytes,
+            part.package,
+        )
+        r_id = part.relate_to(svg_part, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image")
+
+        # 创建内联图片 XML（不要用 .set() 设置 xmlns 属性，OxmlElement 通过前缀自动处理命名空间）
+        inline = OxmlElement("wp:inline")
+        inline.set("distT", "0")
+        inline.set("distB", "0")
+        inline.set("distL", "0")
+        inline.set("distR", "0")
+
+        extent = OxmlElement("wp:extent")
+        extent.set("cx", str(width_emu))
+        extent.set("cy", str(height_emu))
+        inline.append(extent)
+
+        docPr = OxmlElement("wp:docPr")
+        docPr.set("id", "1")
+        docPr.set("name", "Architecture Diagram")
+        inline.append(docPr)
+
+        graphic = OxmlElement("a:graphic")
+
+        graphicData = OxmlElement("a:graphicData")
+        graphicData.set("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")
+
+        pic = OxmlElement("pic:pic")
+
+        nvPicPr = OxmlElement("pic:nvPicPr")
+        cNvPr = OxmlElement("pic:cNvPr")
+        cNvPr.set("id", "0")
+        cNvPr.set("name", "architecture.svg")
+        nvPicPr.append(cNvPr)
+        nvPicPr.append(OxmlElement("pic:cNvPicPr"))
+        pic.append(nvPicPr)
+
+        blipFill = OxmlElement("pic:blipFill")
+        blip = OxmlElement("a:blip")
+        blip.set(_qn("r:embed"), r_id)
+        blipFill.append(blip)
+        stretch = OxmlElement("a:stretch")
+        stretch.append(OxmlElement("a:fillRect"))
+        blipFill.append(stretch)
+        pic.append(blipFill)
+
+        spPr = OxmlElement("pic:spPr")
+        xfrm = OxmlElement("a:xfrm")
+        off = OxmlElement("a:off")
+        off.set("x", "0")
+        off.set("y", "0")
+        xfrm.append(off)
+        ext = OxmlElement("a:ext")
+        ext.set("cx", str(width_emu))
+        ext.set("cy", str(height_emu))
+        xfrm.append(ext)
+        spPr.append(xfrm)
+        prstGeom = OxmlElement("a:prstGeom")
+        prstGeom.set("prst", "rect")
+        spPr.append(prstGeom)
+        pic.append(spPr)
+
+        graphicData.append(pic)
+        graphic.append(graphicData)
+        inline.append(graphic)
+
+        # 将 inline 放到段落 run 的 drawing 元素中
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        drawing = OxmlElement("w:drawing")
+        drawing.append(inline)
+        run._element.append(drawing)
+        return True
+    except Exception:
+        return False
 
 
 CSV_SYSTEM_PROMPT = (
@@ -820,11 +1021,11 @@ def _add_toc(doc):
     run._element.append(fldChar_end)
 
 
-def create_solution_docx(content: str, customer_name: str, svg_png_bytes: Optional[bytes] = None) -> bytes:
+def create_solution_docx(content: str, customer_name: str, svg_code: Optional[str] = None) -> bytes:
     """
     基于 solution 模板生成解决方案架构 Word 文档。
     布局: 封面标题（独占一页） → 目录（独占一页） → 正文
-    如果提供 svg_png_bytes，则在第二章节结束后插入架构图。
+    如果提供 svg_code，则在第二章节结束后插入架构图。
     """
     doc = _load_template(SOLUTION_TEMPLATE_PATH)
     title = _extract_title(content, f"{customer_name} - AI 解决方案架构文档")
@@ -851,7 +1052,7 @@ def create_solution_docx(content: str, customer_name: str, svg_png_bytes: Option
     _add_page_break(doc)
 
     # ---- 第 3 页起：正文内容（已去掉第一个 # 标题） ----
-    if svg_png_bytes:
+    if svg_code:
         # 在第二章节后插入架构图
         # 查找第三个 ## 标题（即第三章开头），在其前面插入图片
         lines = body_content.split("\n")
@@ -871,11 +1072,7 @@ def create_solution_docx(content: str, customer_name: str, svg_png_bytes: Option
 
         # 插入架构图
         doc.add_paragraph()  # 空行
-        img_paragraph = doc.add_paragraph()
-        img_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        img_run = img_paragraph.add_run()
-        img_stream = io.BytesIO(svg_png_bytes)
-        img_run.add_picture(img_stream, width=Cm(16))
+        _add_svg_image_to_doc(doc, svg_code, width_cm=16)
 
         # 图注
         caption = doc.add_paragraph()
@@ -1111,6 +1308,7 @@ def azure_arm_request(
     timeout: int = 90,
     poll_lro: bool = True,
     lro_timeout: int = 900,
+    max_retries: int = 3,
 ) -> Dict[str, Any]:
     """调用 Azure ARM REST API。path_or_url 可传完整 URL 或 ARM 相对路径。"""
     url = path_or_url if path_or_url.startswith("http") else f"{AZURE_MANAGEMENT_ENDPOINT}{path_or_url}"
@@ -1118,7 +1316,20 @@ def azure_arm_request(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    response = requests.request(method, url, headers=headers, json=body, timeout=timeout)
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries):
+        try:
+            response = requests.request(method, url, headers=headers, json=body, timeout=timeout)
+            break
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                time.sleep(5 * (attempt + 1))
+            else:
+                raise RuntimeError(
+                    f"HTTPSConnectionPool(host='management.azure.com', port=443): "
+                    f"Max retries exceeded with url: {path_or_url.split('?')[0]} — {exc}"
+                ) from exc
     if response.status_code >= 400:
         raise RuntimeError(_format_arm_error(response))
     payload: Dict[str, Any] = {}
@@ -1310,12 +1521,9 @@ def generate_solution_artifact(
 
     content = call_azure_openai(system_prompt, user_ctx)
     if current_doc_type == "AI":
-        # 生成 SVG 架构图并转换为 PNG
-        svg_png_bytes = None
+        # 生成 SVG 架构图
         svg_code = generate_svg_architecture(content, customer_name)
-        if svg_code:
-            svg_png_bytes = _svg_to_png_bytes(svg_code)
-        docx_bytes = create_solution_docx(content=content, customer_name=customer_name, svg_png_bytes=svg_png_bytes)
+        docx_bytes = create_solution_docx(content=content, customer_name=customer_name, svg_code=svg_code)
         file_name = f"{account_name}-Solution Architecture.docx"
     else:
         docx_bytes = create_infra_docx(content=content, customer_name=customer_name)
@@ -1896,9 +2104,40 @@ def _safe_csv_prefix(account_name: str) -> str:
 
 
 def prefix_csv_server_names(csv_text: str, prefix: str) -> str:
+    """给 CSV 中的服务器名添加客户前缀，并将序号随机化以避免多人导入时序号冲突。"""
+    import random as _rng
     lines = csv_text.strip().split("\n")
     if not lines:
         return csv_text
+
+    # 使用 prefix 作为随机种子，确保同一客户每次生成的序号相同（tier cache 可匹配）
+    seed = int(hashlib.md5(prefix.encode()).hexdigest(), 16) % (2**32)
+    rng = _rng.Random(seed)
+
+    # 收集所有数字后缀并生成随机映射
+    num_pattern = re.compile(r"(\d+)")
+    # 找出所有行中使用的数字，生成一个不重复的随机序号池
+    all_numbers = set()
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        name = line.split(",", 1)[0].strip()
+        for m in num_pattern.finditer(name):
+            all_numbers.add(int(m.group()))
+
+    # 生成随机映射：原始序号 → 随机序号（范围扩大避免冲突）
+    max_num = max(all_numbers) if all_numbers else 50
+    pool_start = rng.randint(100, 800)
+    number_map: Dict[int, int] = {}
+    used_numbers = set()
+    for orig_num in sorted(all_numbers):
+        new_num = pool_start + rng.randint(1, 5)
+        while new_num in used_numbers:
+            new_num += rng.randint(1, 3)
+        number_map[orig_num] = new_num
+        used_numbers.add(new_num)
+        pool_start = new_num
+
     result = [lines[0]]
     for line in lines[1:]:
         if not line.strip():
@@ -1906,7 +2145,12 @@ def prefix_csv_server_names(csv_text: str, prefix: str) -> str:
         parts = line.split(",", 1)
         if len(parts) >= 2:
             original_name = parts[0].strip()
-            result.append(f"{prefix}-{original_name},{parts[1]}")
+            # 替换名称中的数字为随机化后的数字
+            def _replace_num(m):
+                orig = int(m.group())
+                return str(number_map.get(orig, orig))
+            randomized_name = num_pattern.sub(_replace_num, original_name)
+            result.append(f"{prefix}-{randomized_name},{parts[1]}")
         else:
             result.append(line)
     return "\n".join(result)
@@ -2128,6 +2372,7 @@ def get_machine_ids_for_tier(
 
     selected_template_names = {n.lower() for n in tier_data["machine_names"]}
 
+    # 先尝试按名称匹配
     selected_ids: List[str] = []
     for m in machines:
         display_name = m.get("properties", {}).get("displayName", "")
@@ -2136,6 +2381,13 @@ def get_machine_ids_for_tier(
             mid = m.get("id")
             if mid:
                 selected_ids.append(mid)
+
+    # 如果名称匹配失败（例如缓存来自旧命名方案），按缓存的机器数量选取
+    expected_count = tier_data.get("machine_count", len(selected_template_names))
+    if len(selected_ids) < expected_count:
+        all_ids = [m.get("id") for m in machines if m.get("id")]
+        selected_ids = all_ids[:expected_count]
+
     return selected_ids
 
 
@@ -2276,8 +2528,18 @@ def tune_assessment_to_budget(
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]], bool]:
     history: List[Dict[str, Any]] = []
     target_min = annual_budget if annual_budget and annual_budget > 0 else None
-    target_max = annual_budget * 1.2 if annual_budget and annual_budget > 0 else None
-    target_mid = annual_budget * 1.1 if annual_budget and annual_budget > 0 else None
+    # 目标上限为当前档次的天花板（不超过下一个 tier），而非固定 120%
+    if annual_budget and annual_budget > 0:
+        current_tier = snap_budget_to_tier(annual_budget)
+        tier_idx = BUDGET_TIERS.index(current_tier) if current_tier in BUDGET_TIERS else -1
+        if tier_idx < len(BUDGET_TIERS) - 1:
+            target_max = float(BUDGET_TIERS[tier_idx + 1])
+        else:
+            target_max = annual_budget * 1.5  # 最大档次无上限约束，放宽到 150%
+        target_mid = (target_min + target_max) / 2
+    else:
+        target_max = None
+        target_mid = None
 
     def _record(round_name: str, action: str, current: Dict[str, Any], met: bool) -> None:
         monthly_total = assessment_monthly_total_cost(current)
@@ -2390,7 +2652,8 @@ def tune_assessment_to_budget(
             return assessment, history, True
 
     progress(
-        "已自动调整 3 轮，但 Azure Migrate 年化估算仍未落入用户预估年消耗的 100%-120% 区间；"
+        f"已自动调整 3 轮，但 Azure Migrate 年化估算仍未落入用户预估年消耗的档次区间"
+        f"（{_format_usd(target_min)} ~ {_format_usd(target_max)}）；"
         "请到 Azure Portal 的评估设置中手动调整后重新导出。"
     )
     return assessment, history, False
@@ -2505,9 +2768,9 @@ def run_azure_migrate_assessment(
     run_suffix = str(int(time.time()))
     short_run_suffix = run_suffix[-6:]
     project_name = _safe_azure_name(safe_base, "poe", "project", 55)
-    site_name = _safe_azure_name(safe_base, "poe", f"site{short_run_suffix}", 24)
+    site_name = _safe_azure_name(safe_base, "poe", "site", 24)
     master_site_name = _safe_azure_name(safe_base, "poe", "masterSite", 55)
-    collector_name = _safe_azure_name(safe_base, "poe", f"collector-{short_run_suffix}", 55)
+    collector_name = _safe_azure_name(safe_base, "poe", "collector", 55)
     group_name = _safe_azure_name(safe_base, "poe", f"group-{run_suffix}", 55)
     assessment_resource_name = _safe_azure_name(assessment_name, "poe-assessment", max_len=55)
     project_location = resolve_migrate_project_location(subscription_id, resource_group, token)
@@ -2763,71 +3026,87 @@ def run_azure_migrate_assessment(
     })
     progress(f"成功创建 Import Collector：{collector_name}")
 
-    # ── Step 8: 获取 SAS URL 并上传 CSV ──
-    progress("获取 CSV 上传地址并上传服务器清单...")
-    import_uri_path = (
+    # ── Step 8: 检查当前 Import Site 是否已有库存 —— 有则跳过 CSV 导入 ──
+    site_machines_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.OffAzure/importSites/{site_name}/importUri"
-        f"?api-version={AZURE_OFFAZURE_API_VERSION}"
+        f"/providers/Microsoft.OffAzure/importSites/{site_name}"
+        f"/machines?api-version={AZURE_OFFAZURE_API_VERSION}"
     )
-    import_uri_payload = azure_arm_request("POST", import_uri_path, token, {})
-    sas_url = _extract_sas_url(import_uri_payload)
-    if not sas_url:
-        raise RuntimeError(f"Azure 未返回可用的 CSV 上传 SAS URL：{import_uri_payload}")
-    import_job_arm_id = import_uri_payload.get("jobArmId") if isinstance(import_uri_payload, dict) else None
+    try:
+        existing_site_machines = azure_arm_list(site_machines_path, token)
+    except Exception:
+        existing_site_machines = []
 
-    upload_response = requests.put(
-        sas_url,
-        data=csv_bytes,
-        headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "text/csv"},
-        timeout=180,
-    )
-    if upload_response.status_code >= 400:
-        raise RuntimeError(f"上传 CSV 到 Azure Migrate 失败：{upload_response.status_code} {upload_response.text[:800]}")
-    progress(f"  ✅ CSV 已上传（{len(csv_bytes)} 字节）")
+    if existing_site_machines:
+        progress(f"  ℹ️ Import Site 已有 {len(existing_site_machines)} 台服务器库存，跳过 CSV 重新导入")
+        imported_site_machines = existing_site_machines
+        portal_inventory_count = len(existing_site_machines)
+    else:
+        # ── 获取 SAS URL 并上传 CSV ──
+        progress("获取 CSV 上传地址并上传服务器清单...")
+        import_uri_path = (
+            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.OffAzure/importSites/{site_name}/importUri"
+            f"?api-version={AZURE_OFFAZURE_API_VERSION}"
+        )
+        import_uri_payload = azure_arm_request("POST", import_uri_path, token, {})
+        sas_url = _extract_sas_url(import_uri_payload)
+        if not sas_url:
+            raise RuntimeError(f"Azure 未返回可用的 CSV 上传 SAS URL：{import_uri_payload}")
+        import_job_arm_id = import_uri_payload.get("jobArmId") if isinstance(import_uri_payload, dict) else None
 
-    # ── Step 9: 触发 Import Job（回传 importUri 返回的 SasUriResponse） ──
-    progress("触发 Import Job 导入服务器清单...")
-    import_trigger_body = dict(import_uri_payload) if isinstance(import_uri_payload, dict) else {}
-    import_trigger_body["uri"] = sas_url
-    if import_job_arm_id:
-        import_trigger_body["jobArmId"] = import_job_arm_id
-    job_result = azure_arm_request("POST", import_uri_path, token, import_trigger_body)
-    import_job_arm_id = (
-        job_result.get("jobArmId")
-        or import_job_arm_id
-        or job_result.get("id")
-        if isinstance(job_result, dict)
-        else import_job_arm_id
-    )
-    progress("成功触发 Import Job")
+        upload_response = requests.put(
+            sas_url,
+            data=csv_bytes,
+            headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "text/csv"},
+            timeout=180,
+        )
+        if upload_response.status_code >= 400:
+            raise RuntimeError(f"上传 CSV 到 Azure Migrate 失败：{upload_response.status_code} {upload_response.text[:800]}")
+        progress(f"  ✅ CSV 已上传（{len(csv_bytes)} 字节）")
 
-    # ── Step 10: 等待 OffAzure Import Site 完成 CSV 解析 ──
-    imported_site_machines = wait_for_import_site_import(
-        subscription_id,
-        resource_group,
-        site_name,
-        token,
-        progress,
-        job_arm_id=import_job_arm_id,
-    )
-    progress(f"  ✅ Import Site 已导入 {len(imported_site_machines)} 台服务器")
+        # ── Step 9: 触发 Import Job（回传 importUri 返回的 SasUriResponse） ──
+        progress("触发 Import Job 导入服务器清单...")
+        import_trigger_body = dict(import_uri_payload) if isinstance(import_uri_payload, dict) else {}
+        import_trigger_body["uri"] = sas_url
+        if import_job_arm_id:
+            import_trigger_body["jobArmId"] = import_job_arm_id
+        job_result = azure_arm_request("POST", import_uri_path, token, import_trigger_body)
+        import_job_arm_id = (
+            job_result.get("jobArmId")
+            or import_job_arm_id
+            or job_result.get("id")
+            if isinstance(job_result, dict)
+            else import_job_arm_id
+        )
+        progress("成功触发 Import Job")
 
-    # Import Collector 在导入完成后再 PUT 一次，触发 assessmentProject 拉取刚导入的机器。
-    azure_arm_request("PUT", collector_path, token, {
-        "properties": {"discoverySiteId": discovery_site_id}
-    })
-    progress("  ✅ Import Collector 已刷新同步")
+        # ── Step 10: 等待 OffAzure Import Site 完成 CSV 解析 ──
+        imported_site_machines = wait_for_import_site_import(
+            subscription_id,
+            resource_group,
+            site_name,
+            token,
+            progress,
+            job_arm_id=import_job_arm_id,
+        )
+        progress(f"  ✅ Import Site 已导入 {len(imported_site_machines)} 台服务器")
 
-    portal_inventory_count = wait_for_portal_inventory_summary(
-        subscription_id,
-        resource_group,
-        project_name,
-        len(imported_site_machines),
-        token,
-        progress,
-    )
-    progress(f"  ✅ Azure Portal 全部库存汇总已刷新: {portal_inventory_count} 台服务器")
+        # Import Collector 在导入完成后再 PUT 一次，触发 assessmentProject 拉取刚导入的机器。
+        azure_arm_request("PUT", collector_path, token, {
+            "properties": {"discoverySiteId": discovery_site_id}
+        })
+        progress("  ✅ Import Collector 已刷新同步")
+
+        portal_inventory_count = wait_for_portal_inventory_summary(
+            subscription_id,
+            resource_group,
+            project_name,
+            len(imported_site_machines),
+            token,
+            progress,
+        )
+        progress(f"  ✅ Azure Portal 全部库存汇总已刷新: {portal_inventory_count} 台服务器")
 
     # ── Step 11: 等待 Assessment Project 可读取机器 ──
     machines = wait_for_project_machines(
@@ -3058,29 +3337,55 @@ def fix_assessment_excel_timestamps(
 ) -> bytes:
     """
     修改 Assessment Excel 报告中的时间戳，使其位于用户输入的 POV 时间区间内。
-    - Assessment_Summary sheet: "Created on (UTC)" 列
-    - Assessment_Properties sheet: "Performance history start time" 和 "Performance history end time"
+    - Assessment_Summary sheet: "Created on (UTC)" 列 — 纯文本格式 M/D/YYYY H:MM:SS AM
+    - Assessment_Properties sheet: "Performance history start time" = Created on (UTC)
+      "Performance history end time" = start + 1 天，纯文本格式，不改时分秒
     """
     import random
     from openpyxl import load_workbook
 
     wb = load_workbook(io.BytesIO(excel_bytes))
 
-    # 生成区间内的随机时间
-    start_dt = datetime.datetime.combine(pov_start, datetime.time(8, 0, 0))
-    end_dt = datetime.datetime.combine(pov_end, datetime.time(18, 0, 0))
-    delta_seconds = int((end_dt - start_dt).total_seconds())
-    if delta_seconds <= 0:
-        delta_seconds = 86400  # fallback 1 day
+    # 在 POV 区间内随机选一天作为评估创建日
+    total_days = (pov_end - pov_start).days
+    if total_days <= 0:
+        total_days = 1
+    random_day_offset = random.randint(1, max(total_days - 1, 1))
+    created_date = pov_start + datetime.timedelta(days=random_day_offset)
 
-    def _random_dt_in_range():
-        offset = random.randint(0, delta_seconds)
-        return start_dt + datetime.timedelta(seconds=offset)
+    def _format_as_text(dt_val: datetime.datetime) -> str:
+        """格式化为 M/D/YYYY H:MM:SS AM/PM 纯文本。"""
+        hour = dt_val.hour
+        ampm = "AM" if hour < 12 else "PM"
+        hour_12 = hour % 12
+        if hour_12 == 0:
+            hour_12 = 12
+        return f"{dt_val.month}/{dt_val.day}/{dt_val.year} {hour_12}:{dt_val.minute:02d}:{dt_val.second:02d} {ampm}"
+
+    def _parse_time_from_value(orig):
+        """从原始单元格值中提取时分秒。"""
+        if isinstance(orig, datetime.datetime):
+            return orig.hour, orig.minute, orig.second
+        # 尝试从文本中解析时间部分
+        text = str(orig).strip()
+        import re
+        m = re.search(r'(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?', text, re.IGNORECASE)
+        if m:
+            h, mi, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            ampm = (m.group(4) or "").upper()
+            if ampm == "PM" and h != 12:
+                h += 12
+            elif ampm == "AM" and h == 12:
+                h = 0
+            return h, mi, s
+        return 2, 35, 35  # 默认时间
+
+    # 用于记录 Created on (UTC) 最终时间，供 Performance history start 使用
+    created_datetime = None
 
     # ── 修改 Assessment_Summary sheet ──
     if "Assessment_Summary" in wb.sheetnames:
         ws = wb["Assessment_Summary"]
-        # 查找 "Created on (UTC)" 列
         header_row = 1
         created_col = None
         for col in range(1, ws.max_column + 1):
@@ -3089,16 +3394,28 @@ def fix_assessment_excel_timestamps(
                 created_col = col
                 break
         if created_col:
-            created_time = _random_dt_in_range()
             for row in range(2, ws.max_row + 1):
-                if ws.cell(row=row, column=created_col).value is not None:
-                    ws.cell(row=row, column=created_col).value = created_time
+                orig = ws.cell(row=row, column=created_col).value
+                if orig is not None:
+                    h, mi, s = _parse_time_from_value(orig)
+                    created_datetime = datetime.datetime(
+                        created_date.year, created_date.month, created_date.day, h, mi, s
+                    )
+                    ws.cell(row=row, column=created_col).value = _format_as_text(created_datetime)
+
+    # 如果没从 Summary 里获取到，使用默认时间
+    if created_datetime is None:
+        created_datetime = datetime.datetime(
+            created_date.year, created_date.month, created_date.day, 2, 35, 35
+        )
 
     # ── 修改 Assessment_Properties sheet ──
+    # Performance history start = Created on (UTC)
+    # Performance history end = start + 1天
+    perf_end_datetime = created_datetime + datetime.timedelta(days=1)
+
     if "Assessment_Properties" in wb.sheetnames:
         ws = wb["Assessment_Properties"]
-        # 这个 sheet 可能是 key-value 形式或表格形式
-        # 尝试查找 header row
         header_row = 1
         prop_col = None
         val_col = None
@@ -3111,21 +3428,14 @@ def fix_assessment_excel_timestamps(
                 elif "value" in lower_val:
                     val_col = col
 
-        # 生成时间: perf_start 在区间前半段, perf_end 在后半段
-        mid_seconds = delta_seconds // 2
-        perf_start_time = start_dt + datetime.timedelta(seconds=random.randint(0, max(mid_seconds, 1)))
-        perf_end_time = start_dt + datetime.timedelta(seconds=random.randint(max(mid_seconds, 1), delta_seconds))
-
         if prop_col and val_col:
-            # key-value 格式
             for row in range(2, ws.max_row + 1):
                 prop_name = str(ws.cell(row=row, column=prop_col).value or "").lower()
                 if "performance history start" in prop_name:
-                    ws.cell(row=row, column=val_col).value = perf_start_time
+                    ws.cell(row=row, column=val_col).value = _format_as_text(created_datetime)
                 elif "performance history end" in prop_name:
-                    ws.cell(row=row, column=val_col).value = perf_end_time
+                    ws.cell(row=row, column=val_col).value = _format_as_text(perf_end_datetime)
         else:
-            # 尝试表格形式：查找列名包含 performance history
             start_col = None
             end_col = None
             for col in range(1, min(ws.max_column + 1, 50)):
@@ -3139,11 +3449,11 @@ def fix_assessment_excel_timestamps(
             if start_col:
                 for row in range(2, ws.max_row + 1):
                     if ws.cell(row=row, column=start_col).value is not None:
-                        ws.cell(row=row, column=start_col).value = perf_start_time
+                        ws.cell(row=row, column=start_col).value = _format_as_text(created_datetime)
             if end_col:
                 for row in range(2, ws.max_row + 1):
                     if ws.cell(row=row, column=end_col).value is not None:
-                        ws.cell(row=row, column=end_col).value = perf_end_time
+                        ws.cell(row=row, column=end_col).value = _format_as_text(perf_end_datetime)
 
     # 保存
     out_buf = io.BytesIO()
@@ -3608,6 +3918,7 @@ def render_full_auto_poe_area(
                     "total_machine_count": result["migrate"].get("total_machine_count"),
                 }
                 status.update(label="完整 POE 套件生成完成", state="complete")
+                st.session_state["auto_poe_finish_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         except Exception as exc:
             st.session_state.pop("auto_poe_running", None)
             st.session_state["auto_poe_error"] = str(exc)
@@ -3637,7 +3948,10 @@ def render_full_auto_poe_area(
             ],
         )
         if budget_target and not result.get("budget_target_met", True):
-            st.warning("自动调整 3 轮后仍未落入用户预估年消耗的 100%-120% 区间，请在 Azure Portal 的评估设置中手动调整。")
+            st.warning("自动调整 3 轮后仍未落入用户预估年消耗的档次区间，请在 Azure Portal 的评估设置中手动调整。")
+        finish_time = st.session_state.get("auto_poe_finish_time")
+        if finish_time:
+            st.info(f"✅ 任务完成时间：{finish_time}")
         st.download_button(
             label="下载全部 POE 文档 (.zip)",
             data=st.session_state["auto_poe_zip_bytes"],
