@@ -11,6 +11,7 @@ Azure Pricing Calculator 自动化模块
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -37,6 +38,15 @@ class ResourceSpec:
     sku: str
     region: str
     purpose: str
+
+
+@dataclass
+class PageSnapshot:
+    """页面当前状态的简化快照，供 AI 分析。"""
+    search_results: List[str] = field(default_factory=list)
+    visible_buttons: List[str] = field(default_factory=list)
+    dropdown_options: Dict[str, List[str]] = field(default_factory=dict)
+    raw_text: str = ""
 
 
 @dataclass
@@ -762,6 +772,168 @@ class PricingCalculatorAutomation:
 
         return True
 
+    async def _capture_page_snapshot(self) -> PageSnapshot:
+        """采集当前页面中供 AI 判断的轻量信息。"""
+        page = self._page
+        if not page:
+            return PageSnapshot()
+
+        snapshot = PageSnapshot()
+        try:
+            snapshot.search_results = await page.evaluate("""() => {
+                const isVisible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    return style && style.visibility !== 'hidden' && style.display !== 'none' && el.getClientRects().length > 0;
+                };
+                const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                const seen = new Set();
+                const results = [];
+                for (const el of document.querySelectorAll('*')) {
+                    const classText = String(el.getAttribute('class') || '').toLowerCase();
+                    if (!classText.includes('product') && !classText.includes('result') && !classText.includes('card')) {
+                        continue;
+                    }
+                    if (!isVisible(el)) continue;
+                    const text = clean(el.innerText || el.textContent);
+                    if (!text || text.length < 3 || seen.has(text)) continue;
+                    seen.add(text);
+                    results.push(text.slice(0, 500));
+                    if (results.length >= 30) break;
+                }
+                return results;
+            }""")
+        except Exception as e:
+            logger.debug(f"采集搜索结果快照失败: {e}")
+
+        try:
+            snapshot.visible_buttons = await page.evaluate("""() => {
+                const isVisible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    return style && style.visibility !== 'hidden' && style.display !== 'none' && el.getClientRects().length > 0;
+                };
+                const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                const seen = new Set();
+                const buttons = [];
+                for (const el of document.querySelectorAll('button, [role="button"], a')) {
+                    if (!isVisible(el)) continue;
+                    const text = clean(el.innerText || el.textContent || el.getAttribute('aria-label'));
+                    if (!text || seen.has(text)) continue;
+                    seen.add(text);
+                    buttons.push(text.slice(0, 200));
+                    if (buttons.length >= 50) break;
+                }
+                return buttons;
+            }""")
+        except Exception as e:
+            logger.debug(f"采集按钮快照失败: {e}")
+
+        try:
+            snapshot.dropdown_options = await page.evaluate("""() => {
+                const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                const dropdowns = {};
+                let idx = 1;
+                for (const select of document.querySelectorAll('select')) {
+                    const label = clean(
+                        select.getAttribute('aria-label') ||
+                        select.getAttribute('name') ||
+                        select.getAttribute('id') ||
+                        `select_${idx}`
+                    );
+                    const options = Array.from(select.options || [])
+                        .map((option) => clean(option.textContent || option.label || option.value))
+                        .filter(Boolean);
+                    dropdowns[label || `select_${idx}`] = options.slice(0, 80);
+                    idx += 1;
+                }
+                return dropdowns;
+            }""")
+        except Exception as e:
+            logger.debug(f"采集下拉选项快照失败: {e}")
+
+        try:
+            body_text = await page.locator("body").inner_text(timeout=3000)
+            snapshot.raw_text = re.sub(r"\s+", " ", body_text).strip()[:3000]
+        except Exception as e:
+            logger.debug(f"采集页面文本快照失败: {e}")
+
+        return snapshot
+
+    def _call_ai_json(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
+        """调用 Azure OpenAI 并解析 JSON 响应。失败时返回 None。"""
+        try:
+            from llm.client import call_azure_openai
+        except Exception:
+            try:
+                from app import call_azure_openai
+            except Exception as e:
+                logger.debug(f"无法导入 call_azure_openai: {e}")
+                return None
+
+        try:
+            response = call_azure_openai(system_prompt, user_prompt)
+            text = str(response or "").strip()
+            match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+            if match:
+                text = match.group(1).strip()
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception as e:
+            logger.debug(f"AI 页面定位响应解析失败: {e}")
+            return None
+
+    async def _ai_locate(
+        self,
+        snapshot: PageSnapshot,
+        goal: str,
+        context: str = "",
+    ) -> Optional[Dict[str, str]]:
+        """让 AI 基于页面快照给出 click/select/none 操作建议。"""
+        system_prompt = (
+            "你是 Playwright 浏览器自动化的页面理解助手。"
+            "你只能根据用户提供的页面快照选择下一步动作。"
+            "必须只返回 JSON，不要输出 Markdown 或解释。"
+            "允许的 JSON 格式只有："
+            "{\"action\":\"click\",\"target_text\":\"完整按钮或结果文本\"}，"
+            "{\"action\":\"select\",\"target_option\":\"应选的选项文本\"}，"
+            "{\"action\":\"none\",\"reason\":\"原因\"}。"
+        )
+        user_prompt = (
+            f"目标：{goal}\n"
+            f"上下文：{context}\n\n"
+            f"搜索结果：\n{json.dumps(snapshot.search_results, ensure_ascii=False)}\n\n"
+            f"可见按钮：\n{json.dumps(snapshot.visible_buttons, ensure_ascii=False)}\n\n"
+            f"下拉选项：\n{json.dumps(snapshot.dropdown_options, ensure_ascii=False)}\n\n"
+            f"页面文本前 3000 字：\n{snapshot.raw_text}"
+        )
+        result = self._call_ai_json(system_prompt, user_prompt)
+        if not result:
+            return None
+        action = str(result.get("action", "")).lower()
+        if action not in {"click", "select", "none"}:
+            return None
+        return {str(k): str(v) for k, v in result.items() if v is not None}
+
+    async def _ai_suggest_search_term(self, snapshot: PageSnapshot, term: str) -> Optional[str]:
+        """当搜索无结果时，让 AI 给出更可能命中 Calculator 的搜索词。"""
+        system_prompt = (
+            "你是 Azure Pricing Calculator 搜索词助手。"
+            "根据页面快照和原始 Azure 服务名称，给出一个更可能命中产品搜索的英文搜索词。"
+            "必须只返回 JSON，格式为 {\"search_term\":\"搜索词\"} 或 {\"search_term\":\"\"}。"
+        )
+        user_prompt = (
+            f"原始搜索词：{term}\n\n"
+            f"搜索结果：{json.dumps(snapshot.search_results, ensure_ascii=False)}\n"
+            f"可见按钮：{json.dumps(snapshot.visible_buttons, ensure_ascii=False)}\n"
+            f"页面文本：{snapshot.raw_text}"
+        )
+        result = self._call_ai_json(system_prompt, user_prompt)
+        if not result:
+            return None
+        suggested = str(result.get("search_term", "")).strip()
+        if not suggested or suggested.lower() == term.lower():
+            return None
+        return suggested
+
     async def add_service(self, search_term: str) -> bool:
         """通过搜索添加一个服务到估算。返回是否成功。"""
         page = self._page
@@ -822,9 +994,56 @@ class PricingCalculatorAutomation:
         # 搜索结果中每个产品卡片都有一个 "Add to estimate" 按钮
         add_btn = page.locator("button:has-text('Add to estimate')")
         count = await add_btn.count()
-        
+
         if count == 0:
-            return False
+            snapshot = await self._capture_page_snapshot()
+            suggested_term = await self._ai_suggest_search_term(snapshot, term)
+            if suggested_term:
+                logger.debug(f"AI 建议替代搜索词: {term} -> {suggested_term}")
+                await search_input.fill("")
+                await page.wait_for_timeout(300)
+                await search_input.fill(suggested_term)
+                await page.wait_for_timeout(2000)
+                add_btn = page.locator("button:has-text('Add to estimate')")
+                count = await add_btn.count()
+            if count == 0:
+                return False
+
+        if count == 1:
+            try:
+                btn = add_btn.first
+                if await btn.is_visible(timeout=2000):
+                    await btn.scroll_into_view_if_needed(timeout=3000)
+                    await page.wait_for_timeout(300)
+                    await btn.click(timeout=5000)
+                else:
+                    await btn.click(force=True, timeout=5000)
+                await page.wait_for_timeout(2000)
+                try:
+                    await search_input.fill("")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    pass
+                return True
+            except Exception:
+                pass
+
+        if count > 1:
+            snapshot = await self._capture_page_snapshot()
+            decision = await self._ai_locate(
+                snapshot,
+                goal=f"从多个搜索结果中选择最匹配目标服务 {term} 的产品",
+                context="返回 action=click，target_text 使用被选搜索结果或产品卡片中的完整可见文本。",
+            )
+            target_text = (decision or {}).get("target_text", "").strip()
+            if target_text and await self._click_add_for_result_text(page, target_text):
+                await page.wait_for_timeout(2000)
+                try:
+                    await search_input.fill("")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    pass
+                return True
 
         # 尝试点击第一个可见的
         for i in range(count):
@@ -885,6 +1104,37 @@ class PricingCalculatorAutomation:
 
         return False
 
+    async def _click_add_for_result_text(self, page, target_text: str) -> bool:
+        """在包含 AI 选中文本的结果卡片内点击 Add to estimate。"""
+        if not target_text:
+            return False
+
+        snippets = []
+        for candidate in (target_text, target_text.split("\n")[0], target_text[:120], target_text[:80]):
+            candidate = re.sub(r"\s+", " ", candidate).strip()
+            if candidate and candidate not in snippets:
+                snippets.append(candidate)
+
+        for snippet in snippets:
+            try:
+                cards = page.locator("[class*='product'], [class*='result'], [class*='card']").filter(has_text=snippet)
+                for i in range(min(await cards.count(), 8)):
+                    card = cards.nth(i)
+                    btn = card.locator("button:has-text('Add to estimate')")
+                    if await btn.count() == 0:
+                        continue
+                    try:
+                        await btn.first.scroll_into_view_if_needed(timeout=3000)
+                        await page.wait_for_timeout(300)
+                        await btn.first.click(timeout=5000)
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        return False
+
     async def configure_service_region(self, region: str) -> bool:
         """
         为最近添加的服务配置区域。
@@ -940,6 +1190,71 @@ class PricingCalculatorAutomation:
 
         except Exception as e:
             logger.debug(f"配置区域失败: {e}")
+
+        return False
+
+    async def configure_service_sku(self, desired_sku: str) -> bool:
+        """
+        为最近添加的服务配置 SKU。
+        非阻塞：AI 无法定位或页面无匹配选项时返回 False，不影响后续流程。
+        """
+        page = self._page
+        desired_sku = (desired_sku or "").strip()
+        if not page or not desired_sku:
+            return False
+
+        try:
+            snapshot = await self._capture_page_snapshot()
+            decision = await self._ai_locate(
+                snapshot,
+                goal=f"在配置下拉框中选择最接近 {desired_sku} 的 SKU 或定价层选项",
+                context="返回 action=select，target_option 必须是页面某个 select 下拉选项中的完整可见文本。",
+            )
+            if not decision or decision.get("action") != "select":
+                return False
+            target_option = decision.get("target_option", "").strip()
+            if not target_option:
+                return False
+
+            selects = page.locator("select")
+            count = await selects.count()
+            for i in range(count - 1, -1, -1):
+                select = selects.nth(i)
+                try:
+                    options = await select.locator("option").all_text_contents()
+                except Exception:
+                    options = []
+
+                matched = None
+                for option in options:
+                    if option.strip().lower() == target_option.lower():
+                        matched = option.strip()
+                        break
+                if not matched:
+                    for option in options:
+                        opt = option.strip()
+                        if target_option.lower() in opt.lower() or desired_sku.lower() in opt.lower():
+                            matched = opt
+                            break
+                if not matched:
+                    continue
+
+                try:
+                    await select.select_option(label=matched, timeout=3000)
+                    await page.wait_for_timeout(500)
+                    self._log(f"  ✅ 已选择 SKU/层级: {matched}")
+                    return True
+                except Exception:
+                    try:
+                        await select.select_option(value=matched, timeout=3000)
+                        await page.wait_for_timeout(500)
+                        self._log(f"  ✅ 已选择 SKU/层级: {matched}")
+                        return True
+                    except Exception:
+                        continue
+
+        except Exception as e:
+            logger.debug(f"配置 SKU 失败: {e}")
 
         return False
 
@@ -1243,6 +1558,9 @@ async def _add_resources_and_calibrate(
             # 配置区域
             region = resolve_region(res.region)
             await automation.configure_service_region(region)
+            configure_sku = getattr(automation, "configure_service_sku", None)
+            if resolved_sku and configure_sku:
+                await configure_sku(resolved_sku)
             # 如果是 Azure OpenAI，配置 token 数量（避免描述显示 0）
             if "openai" in normalized_name.lower():
                 await automation.configure_openai_tokens(input_tokens=1000, output_tokens=500)
