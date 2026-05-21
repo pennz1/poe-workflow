@@ -679,6 +679,40 @@ def _build_assessment_body(target_location: Optional[str] = None) -> Dict[str, A
     }
 
 
+def _put_assessment_and_wait(
+    assessment_path: str,
+    assessment_body: Dict[str, Any],
+    token: str,
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    group_name: str,
+    assessment_name: str,
+    progress: Callable[[str], None],
+    timeout_seconds: int = 600,
+) -> Dict[str, Any]:
+    """PUT 评估更新并等待计算完成，自动处理 405 冲突。"""
+    deadline = time.time() + timeout_seconds
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            azure_arm_request("PUT", assessment_path, token, assessment_body)
+            break
+        except Exception as e:
+            msg = str(e)
+            if "405" in msg or "under computation" in msg.lower() or "Cannot be updated" in msg:
+                if attempt == 1:
+                    progress(f"  ⏳ 评估仍在计算中，等待完成后再更新...")
+                time.sleep(15)
+                continue
+            raise
+
+    return wait_for_assessment_complete(
+        subscription_id, resource_group, project_name, group_name, assessment_name, token, progress
+    )
+
+
 def tune_assessment_to_budget(
     subscription_id: str,
     resource_group: str,
@@ -799,7 +833,15 @@ def tune_assessment_to_budget(
         if redundancy == current_props.get("azureStorageRedundancy", ""):
             continue
         test_body = {**assessment_body, "properties": {**assessment_body["properties"], "azureStorageRedundancy": redundancy}}
-        test_result = azure_arm_request("PUT", assessment_path, token, test_body)
+        try:
+            test_result = _put_assessment_and_wait(
+                assessment_path, test_body, token,
+                subscription_id, resource_group, project_name, group_name, assessment_name,
+                progress,
+            )
+        except Exception as e:
+            progress(f"  ⚠️ 存储冗余调整失败：{e}")
+            continue
         test_monthly = assessment_monthly_total_cost(test_result)
         test_annual = test_monthly * 12
         if target_min and test_annual < target_min:
@@ -822,9 +864,10 @@ def tune_assessment_to_budget(
         progress(f"评估年化估算不在目标区间，开始自动调整（{round_name}）：{action}")
         assessment_body["properties"].update(patch)
         assessment_body["properties"]["stage"] = "InProgress"
-        azure_arm_request("PUT", assessment_path, token, assessment_body)
-        assessment = wait_for_assessment_complete(
-            subscription_id, resource_group, project_name, group_name, assessment_name, token, progress
+        assessment = _put_assessment_and_wait(
+            assessment_path, assessment_body, token,
+            subscription_id, resource_group, project_name, group_name, assessment_name,
+            progress,
         )
         monthly_total = assessment_monthly_total_cost(assessment)
         annual_total = monthly_total * 12
