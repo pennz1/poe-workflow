@@ -288,8 +288,6 @@ def render_full_auto_poe_area(
                 st.session_state.pop("auto_poe_running", None)
                 st.session_state["auto_poe_zip_bytes"] = result["zip_bytes"]
                 st.session_state["auto_poe_zip_name"] = result["zip_name"]
-                if result["solution"].get("svg_code"):
-                    st.session_state["svg_code"] = result["solution"]["svg_code"]
                 st.session_state["auto_poe_result"] = {
                     "customer_name": cust,
                     "zip_name": result["zip_name"],

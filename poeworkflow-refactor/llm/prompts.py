@@ -1,7 +1,5 @@
 """Prompt templates and template text extraction."""
 
-import re
-
 import streamlit as st
 from docx import Document
 
@@ -202,75 +200,6 @@ POV_SYSTEM_PROMPT = (
     "**重要：** 下方会提供一份【参考模板文档】，你必须严格学习它的章节结构、分阶段格式、表格详细度和交付物命名规范。内容风格要精炼简洁，与模板保持一致。"
 )
 
-# -----------------------------------------------------------------
-# SVG 架构图生成
-# -----------------------------------------------------------------
-SVG_SYSTEM_PROMPT = (
-    "你是一位顶尖的云计算解决方案架构师，同时也是一位精通数据可视化的资深 UI/UX 视觉设计师。"
-    "你擅长将复杂的业务逻辑与技术组件，转化为逻辑清晰、视觉美观且严格遵循企业级规范的 SVG 架构图。\n\n"
-    "你的核心任务是：根据AI解决方案架构的第二、第五、第六、第七、第八章节的架构描述文本，为我绘制一份企业级的 Azure 解决方案逻辑架构图。\n\n"
-    "你的输出必须且只能是一段完整的、符合 XML 规范、可以直接在浏览器中渲染的 `<svg>` 代码。\n\n"
-    "【强制性视觉与排版规范（极度重要）】：\n\n"
-    "1. 现代化审美：严禁生成扁平、死板、古老的纯色方块图。必须使用柔和的阴影、优雅的圆角、细腻的渐变色和清爽有序的排版。\n\n"
-    "2. SVG 定义 (Defs)：你必须在 SVG 开头包含以下 `<defs>` 块：\n"
-    "   <defs>\n"
-    "     <filter id=\"shadow\" x=\"-20%\" y=\"-20%\" width=\"140%\" height=\"140%\">\n"
-    "       <feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"4\"/>\n"
-    "       <feOffset dx=\"2\" dy=\"4\" result=\"offsetblur\"/>\n"
-    "       <feComponentTransfer><feFuncA type=\"linear\" slope=\"0.15\"/></feComponentTransfer>\n"
-    "       <feMerge><feMergeNode/><feMergeNode in=\"SourceGraphic\"/></feMerge>\n"
-    "     </filter>\n"
-    "     <linearGradient id=\"bgGradient\" x1=\"0%\" y1=\"0%\" x2=\"0%\" y2=\"100%\">\n"
-    "       <stop offset=\"0%\" style=\"stop-color:#F5F8FA;stop-opacity:1\" />\n"
-    "       <stop offset=\"100%\" style=\"stop-color:#FFFFFF;stop-opacity:1\" />\n"
-    "     </linearGradient>\n"
-    "     <linearGradient id=\"layerAI\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\">\n"
-    "       <stop offset=\"0%\" style=\"stop-color:#FFFFFF;stop-opacity:0.9\" />\n"
-    "       <stop offset=\"100%\" style=\"stop-color:#F3E8FF;stop-opacity:0.9\" />\n"
-    "     </linearGradient>\n"
-    "     <marker id=\"arrowBlue\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\">\n"
-    "       <path d=\"M0,0 L0,6 L9,3 z\" fill=\"#0078D4\" />\n"
-    "     </marker>\n"
-    "     <marker id=\"arrowPurple\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\">\n"
-    "       <path d=\"M0,0 L0,6 L9,3 z\" fill=\"#5C2D91\" />\n"
-    "     </marker>\n"
-    "   </defs>\n\n"
-    "3. 图层顺序 (Z-Index 隔离策略，绝对强制)：\n"
-    "   第 1 层：全局背景 `<rect width=\"100%\" height=\"100%\" ...>`\n"
-    "   第 2 层：区域划分大框 Zone Backgrounds\n"
-    "   第 3 层：所有连线 `<g id=\"connectors\"> ... </g>`\n"
-    "   第 4 层：所有服务组件卡片 `<g id=\"components\"> ... </g>`\n\n"
-    "4. 组件卡片绘制规范：\n"
-    "   使用 `<g transform=\"translate(x, y)\">` 来组合每个服务的图形、标题和描述。\n"
-    "   所有卡片尺寸尽量统一（width=\"220\" height=\"80\" rx=\"8\"），白色填充带阴影。\n\n"
-    "5. 连线与路由规范 (绝对强制)：\n"
-    "   严禁使用简单对角线 `<line>` 标签！严禁乱穿交叉！\n"
-    "   必须使用正交折线 (Orthogonal Routing)，由水平和垂直线段组成的 `<path>`。\n"
-    "   路径格式为 `M x1 y1 L x2 y1 L x2 y2`。\n\n"
-    "6. Azure 品牌色参考：\n"
-    "   AI/OpenAI: 紫色 #5C2D91, 网络/APIM: 蓝色 #0078D4, 数据库/Search/存储: 青绿色 #008272\n"
-    "   安全/Entra ID: 红色 #D13438, 审计/Monitor: 橙色 #E65100\n\n"
-    "【输出要求】：\n"
-    "直接输出完整的、合法的 XML/SVG 代码，禁止在代码外输出任何解释性文字。\n"
-    "SVG 标签中务必包含 xmlns=\"http://www.w3.org/2000/svg\"。确保闭合所有标签。\n"
-    "SVG 的 viewBox 建议设为 \"0 0 1200 800\"，确保可适配页面宽度。"
-)
-
-
-def _extract_svg_from_response(text: str) -> str:
-    """从 AI 响应中提取 SVG 代码块。"""
-    # 尝试提取 ```svg ... ``` 代码块
-    m = re.search(r"```(?:svg|xml)?\s*\n(.*?)```", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    # 尝试直接匹配 <svg ... </svg>
-    m = re.search(r"(<svg[\s\S]*?</svg>)", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    return text.strip()
-
-
-
 CSV_SYSTEM_PROMPT = (
     "你是一位 Azure 迁移专家。用户会提供一份 Azure 价格估算表（包含资源名称、SKU、估算金额等）和一份 Azure Migrate 导入 CSV 模板。\n\n"
     "你的任务是：\n"
@@ -296,4 +225,3 @@ CSV_SYSTEM_PROMPT = (
     "**输出格式：**\n"
     "只输出纯粹的 CSV 内容（包含表头行），不要输出 Markdown 代码块标记、解释性文字或其他内容。"
 )
-

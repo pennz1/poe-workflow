@@ -17,7 +17,7 @@ from budget.parser import parse_annual_budget_usd
 from config import BUDGET_TIERS
 from documents.infra import create_infra_docx
 from documents.pov import build_pov_prompt, create_pov_docx, has_meaningful_pov_team
-from documents.solution import create_solution_docx, generate_svg_architecture
+from documents.solution import create_solution_docx
 from llm.client import call_azure_openai
 from llm.prompts import POV_SYSTEM_PROMPT, build_infra_system_prompt, build_solution_system_prompt
 
@@ -73,17 +73,13 @@ def generate_solution_artifact(
 
     content = call_azure_openai(system_prompt, user_ctx)
     if current_doc_type == "AI":
-        # 生成 SVG 架构图
-        svg_code = generate_svg_architecture(content, customer_name)
-        docx_bytes = create_solution_docx(content=content, customer_name=customer_name, svg_code=svg_code)
+        docx_bytes = create_solution_docx(content=content, customer_name=customer_name)
         file_name = f"{account_name}-Solution Architecture.docx"
     else:
         docx_bytes = create_infra_docx(content=content, customer_name=customer_name)
         file_name = f"{account_name}-Infra Solution Architecture.docx"
 
     result = {"content": content, "bytes": docx_bytes, "file_name": file_name}
-    if current_doc_type == "AI" and svg_code:
-        result["svg_code"] = svg_code
     return result
 
 

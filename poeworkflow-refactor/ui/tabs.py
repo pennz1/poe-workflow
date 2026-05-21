@@ -199,7 +199,6 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                             st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
                             st.session_state["budget"] = budget
                             st.session_state.pop("pov_text", None)
-                            st.session_state.pop("svg_code", None)
                         persist_session_state()
                         st.rerun()
                     except Exception as e:
@@ -246,7 +245,6 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                             st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
                             st.session_state["budget"] = budget
                             st.session_state.pop("pov_text", None)
-                            st.session_state.pop("svg_code", None)
                         persist_session_state()
                         st.rerun()
                     except Exception as e:
