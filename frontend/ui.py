@@ -142,78 +142,59 @@ def render_device_code_login(user_code: str, verify_url: str) -> None:
         f"""
         <style>
         .poe-device-login {{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            align-items: center;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-        }}
-        .poe-device-copy,
-        .poe-device-link {{
-            display: inline-flex;
+            display: flex;
             align-items: center;
             justify-content: center;
-            min-height: 38px;
-            padding: 0 14px;
+            gap: 8px;
+            padding: 12px 16px;
             border-radius: 8px;
-            font-size: 14px;
-            font-weight: 700;
-            text-decoration: none;
-            cursor: pointer;
-            box-sizing: border-box;
-        }}
-        .poe-device-copy {{
-            border: 1px solid oklch(80% 0.07 78);
-            background: oklch(94.5% 0.035 78);
-            color: oklch(39% 0.085 78);
-        }}
-        .poe-device-copy.is-copied {{
-            border-color: oklch(48% 0.105 152);
-            background: oklch(48% 0.105 152);
-        }}
-        .poe-device-link {{
             border: 1px solid oklch(86.5% 0.014 248);
             background: oklch(99.2% 0.003 248);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+            font-size: 14px;
             color: oklch(39% 0.15 250);
         }}
         </style>
-        <div class="poe-device-login">
-            <button type="button" id="copy-code" class="poe-device-copy" aria-label="复制 Microsoft 设备登录验证码">
-                复制验证码
-            </button>
-            <a class="poe-device-link" href="{url}" target="_blank" rel="noopener noreferrer">
-                打开 Microsoft 登录
-            </a>
+        <div class="poe-device-login" id="poe-login-status">
+            正在准备登录...
         </div>
         <script>
-        const code = "{code}";
-        const btn = document.getElementById("copy-code");
-        btn.addEventListener("click", async () => {{
-            const setDone = () => {{
-                btn.textContent = "已复制";
-                btn.classList.add("is-copied");
-                setTimeout(() => {{
-                    btn.textContent = "复制验证码";
-                    btn.classList.remove("is-copied");
-                }}, 1800);
+        (function() {{
+            const code = "{code}";
+            const url = "{url}";
+            const el = document.getElementById("poe-login-status");
+
+            const copyToClipboard = async function(text) {{
+                try {{
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }} catch (e) {{
+                    const ta = document.createElement("textarea");
+                    ta.value = text;
+                    ta.setAttribute("readonly", "");
+                    ta.style.position = "fixed";
+                    ta.style.opacity = "0";
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    ta.remove();
+                    return true;
+                }}
             }};
-            try {{
-                await navigator.clipboard.writeText(code);
-                setDone();
-            }} catch (error) {{
-                const textarea = document.createElement("textarea");
-                textarea.value = code;
-                textarea.setAttribute("readonly", "");
-                textarea.style.position = "fixed";
-                textarea.style.opacity = "0";
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand("copy");
-                textarea.remove();
-                setDone();
-            }}
-        }});
+
+            (async function() {{
+                const ok = await copyToClipboard(code);
+                if (ok) {{
+                    el.textContent = "验证码已复制 " + code + "，正在打开登录页面...";
+                    setTimeout(function() {{
+                        window.open(url, "_blank", "noopener,noreferrer");
+                    }}, 800);
+                }} else {{
+                    el.innerHTML = "请手动复制验证码 <strong>" + code + "</strong> 并前往 <a href=\\"" + url + "\\" target=\\"_blank\\">Microsoft 登录</a>";
+                }}
+            }})();
+        }})();
         </script>
         """,
-        height=52,
+        height=50,
     )
