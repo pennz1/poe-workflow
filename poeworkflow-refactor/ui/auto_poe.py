@@ -2,6 +2,7 @@
 
 import datetime
 import os
+import time
 from typing import List
 
 import streamlit as st
@@ -216,6 +217,7 @@ def render_full_auto_poe_area(
 
         try:
             st.session_state["auto_poe_running"] = True
+            st.session_state["auto_poe_start_time"] = time.time()
             with st.status("正在生成完整 POE 套件", expanded=True) as status:
                 stop_placeholder = st.empty()
                 log_placeholder = st.empty()
@@ -313,7 +315,22 @@ def render_full_auto_poe_area(
             st.warning("自动调整 3 轮后仍未落入用户预估年消耗的档次区间，请在 Azure Portal 的评估设置中手动调整。")
         finish_time = st.session_state.get("auto_poe_finish_time")
         if finish_time:
-            st.info(f"✅ 任务完成时间：{finish_time}")
+            start_ts = st.session_state.get("auto_poe_start_time")
+            if start_ts:
+                elapsed_sec = int(time.time() - start_ts)
+                if elapsed_sec < 60:
+                    elapsed_str = f"{elapsed_sec} 秒"
+                elif elapsed_sec < 3600:
+                    minutes = elapsed_sec // 60
+                    seconds = elapsed_sec % 60
+                    elapsed_str = f"{minutes} 分 {seconds} 秒"
+                else:
+                    hours = elapsed_sec // 3600
+                    minutes = (elapsed_sec % 3600) // 60
+                    elapsed_str = f"{hours} 时 {minutes} 分"
+                st.info(f"✅ 任务完成时间：{finish_time}（耗时 {elapsed_str}）")
+            else:
+                st.info(f"✅ 任务完成时间：{finish_time}")
         st.download_button(
             label="下载全部 POE 文档 (.zip)",
             data=st.session_state["auto_poe_zip_bytes"],
