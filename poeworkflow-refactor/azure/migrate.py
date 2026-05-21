@@ -701,7 +701,7 @@ def tune_assessment_to_budget(
         if tier_idx < len(BUDGET_TIERS) - 1:
             target_max = float(BUDGET_TIERS[tier_idx + 1])
         else:
-            target_max = annual_budget * 1.5  # 最大档次无上限约束，放宽到 150%
+            target_max = annual_budget * 1.2  # 所有档位统一上限 120%
         target_mid = (target_min + target_max) / 2
     else:
         target_max = None
@@ -1502,26 +1502,28 @@ def fix_assessment_excel_timestamps(
     pov_start: datetime.date,
     pov_end: datetime.date,
 ) -> bytes:
-    """
-    修改 Assessment Excel 报告中的时间戳，使其位于用户输入的 POV 时间区间内。
-    - Assessment_Summary sheet: "Created on (UTC)" 列 — 纯文本格式 M/D/YYYY H:MM:SS AM
-    - Assessment_Properties sheet: "Performance history start time" = Created on (UTC)
-      "Performance history end time" = start + 1 天，纯文本格式，不改时分秒
-    """
     import random
     from openpyxl import load_workbook
 
     wb = load_workbook(io.BytesIO(excel_bytes))
 
-    # 在 POV 区间内随机选一天作为评估创建日
     total_days = (pov_end - pov_start).days
     if total_days <= 0:
         total_days = 1
     random_day_offset = random.randint(1, max(total_days - 1, 1))
     created_date = pov_start + datetime.timedelta(days=random_day_offset)
 
+    perf_end_date = created_date
+    perf_start_date = created_date - datetime.timedelta(days=1)
+
+    if perf_start_date < pov_start:
+        perf_start_date = pov_start
+        perf_end_date = pov_start + datetime.timedelta(days=1)
+
+    def _format_date_only(dt_val: datetime.date) -> str:
+        return f"{dt_val.month}/{dt_val.day}/{dt_val.year}"
+
     def _format_as_text(dt_val: datetime.datetime) -> str:
-        """格式化为 M/D/YYYY H:MM:SS AM/PM 纯文本。"""
         hour = dt_val.hour
         ampm = "AM" if hour < 12 else "PM"
         hour_12 = hour % 12
@@ -1530,13 +1532,10 @@ def fix_assessment_excel_timestamps(
         return f"{dt_val.month}/{dt_val.day}/{dt_val.year} {hour_12}:{dt_val.minute:02d}:{dt_val.second:02d} {ampm}"
 
     def _parse_time_from_value(orig):
-        """从原始单元格值中提取时分秒。"""
         if isinstance(orig, datetime.datetime):
             return orig.hour, orig.minute, orig.second
-        # 尝试从文本中解析时间部分
         text = str(orig).strip()
-        import re
-        m = re.search(r'(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?', text, re.IGNORECASE)
+        m = re.search(r"(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?", text, re.IGNORECASE)
         if m:
             h, mi, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
             ampm = (m.group(4) or "").upper()
@@ -1545,18 +1544,15 @@ def fix_assessment_excel_timestamps(
             elif ampm == "AM" and h == 12:
                 h = 0
             return h, mi, s
-        return 2, 35, 35  # 默认时间
+        return 2, 35, 35
 
-    # 用于记录 Created on (UTC) 最终时间，供 Performance history start 使用
     created_datetime = None
 
-    # ── 修改 Assessment_Summary sheet ──
     if "Assessment_Summary" in wb.sheetnames:
         ws = wb["Assessment_Summary"]
-        header_row = 1
         created_col = None
         for col in range(1, ws.max_column + 1):
-            cell_val = ws.cell(row=header_row, column=col).value
+            cell_val = ws.cell(row=1, column=col).value
             if cell_val and "created on" in str(cell_val).lower():
                 created_col = col
                 break
@@ -1570,59 +1566,23 @@ def fix_assessment_excel_timestamps(
                     )
                     ws.cell(row=row, column=created_col).value = _format_as_text(created_datetime)
 
-    # 如果没从 Summary 里获取到，使用默认时间
     if created_datetime is None:
         created_datetime = datetime.datetime(
             created_date.year, created_date.month, created_date.day, 2, 35, 35
         )
 
-    # ── 修改 Assessment_Properties sheet ──
-    # Performance history start = Created on (UTC)
-    # Performance history end = start + 1天
-    perf_end_datetime = created_datetime + datetime.timedelta(days=1)
-
     if "Assessment_Properties" in wb.sheetnames:
         ws = wb["Assessment_Properties"]
-        header_row = 1
-        prop_col = None
-        val_col = None
-        for col in range(1, min(ws.max_column + 1, 20)):
-            cell_val = ws.cell(row=header_row, column=col).value
-            if cell_val:
-                lower_val = str(cell_val).lower()
-                if "property" in lower_val or "name" in lower_val or "key" in lower_val:
-                    prop_col = col
-                elif "value" in lower_val:
-                    val_col = col
-
-        if prop_col and val_col:
-            for row in range(2, ws.max_row + 1):
-                prop_name = str(ws.cell(row=row, column=prop_col).value or "").lower()
+        for row in range(2, ws.max_row + 1):
+            for col in range(1, ws.max_column + 1):
+                prop_name = str(ws.cell(row=row, column=col).value or "").lower()
                 if "performance history start" in prop_name:
-                    ws.cell(row=row, column=val_col).value = _format_as_text(created_datetime)
+                    val_col = col + 1 if col + 1 <= ws.max_column else col
+                    ws.cell(row=row, column=val_col).value = _format_date_only(perf_start_date)
                 elif "performance history end" in prop_name:
-                    ws.cell(row=row, column=val_col).value = _format_as_text(perf_end_datetime)
-        else:
-            start_col = None
-            end_col = None
-            for col in range(1, min(ws.max_column + 1, 50)):
-                cell_val = ws.cell(row=header_row, column=col).value
-                if cell_val:
-                    lower_val = str(cell_val).lower()
-                    if "performance history start" in lower_val:
-                        start_col = col
-                    elif "performance history end" in lower_val:
-                        end_col = col
-            if start_col:
-                for row in range(2, ws.max_row + 1):
-                    if ws.cell(row=row, column=start_col).value is not None:
-                        ws.cell(row=row, column=start_col).value = _format_as_text(created_datetime)
-            if end_col:
-                for row in range(2, ws.max_row + 1):
-                    if ws.cell(row=row, column=end_col).value is not None:
-                        ws.cell(row=row, column=end_col).value = _format_as_text(perf_end_datetime)
+                    val_col = col + 1 if col + 1 <= ws.max_column else col
+                    ws.cell(row=row, column=val_col).value = _format_date_only(perf_end_date)
 
-    # 保存
     out_buf = io.BytesIO()
     wb.save(out_buf)
     return out_buf.getvalue()
