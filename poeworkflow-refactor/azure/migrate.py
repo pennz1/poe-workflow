@@ -1513,16 +1513,6 @@ def fix_assessment_excel_timestamps(
     random_day_offset = random.randint(1, max(total_days - 1, 1))
     created_date = pov_start + datetime.timedelta(days=random_day_offset)
 
-    perf_end_date = created_date
-    perf_start_date = created_date - datetime.timedelta(days=1)
-
-    if perf_start_date < pov_start:
-        perf_start_date = pov_start
-        perf_end_date = pov_start + datetime.timedelta(days=1)
-
-    def _format_date_only(dt_val: datetime.date) -> str:
-        return f"{dt_val.month}/{dt_val.day}/{dt_val.year}"
-
     def _format_as_text(dt_val: datetime.datetime) -> str:
         hour = dt_val.hour
         ampm = "AM" if hour < 12 else "PM"
@@ -1573,15 +1563,27 @@ def fix_assessment_excel_timestamps(
 
     if "Assessment_Properties" in wb.sheetnames:
         ws = wb["Assessment_Properties"]
+        # end datetime = Created on (UTC) 完整 datetime
+        perf_end_datetime = created_datetime
+        # start datetime = end datetime - 1 天
+        perf_start_datetime = created_datetime - datetime.timedelta(days=1)
+        # 边界保护：start 不能早于 POV 开始
+        pov_start_datetime = datetime.datetime(
+            pov_start.year, pov_start.month, pov_start.day, 0, 0, 0
+        )
+        if perf_start_datetime < pov_start_datetime:
+            perf_start_datetime = pov_start_datetime
+            perf_end_datetime = pov_start_datetime + datetime.timedelta(days=1)
+
         for row in range(2, ws.max_row + 1):
             for col in range(1, ws.max_column + 1):
                 prop_name = str(ws.cell(row=row, column=col).value or "").lower()
                 if "performance history start" in prop_name:
-                    val_col = col + 1 if col + 1 <= ws.max_column else col
-                    ws.cell(row=row, column=val_col).value = _format_date_only(perf_start_date)
+                    val_col = col + 1
+                    ws.cell(row=row, column=val_col).value = _format_as_text(perf_start_datetime)
                 elif "performance history end" in prop_name:
-                    val_col = col + 1 if col + 1 <= ws.max_column else col
-                    ws.cell(row=row, column=val_col).value = _format_date_only(perf_end_date)
+                    val_col = col + 1
+                    ws.cell(row=row, column=val_col).value = _format_as_text(perf_end_datetime)
 
     out_buf = io.BytesIO()
     wb.save(out_buf)
