@@ -666,7 +666,7 @@ def _build_assessment_body(target_location: Optional[str] = None) -> Dict[str, A
             "azureSecurityOfferingType": "MDC",
             "discountPercentage": 0,
             "sizingCriterion": "PerformanceBased",
-            "azureDiskTypes": ["Premium", "StandardSSD", "Standard"],
+            "azureDiskTypes": ["PremiumSSD", "StandardSSD", "StandardHDD"],
             "azureVmFamilies": [
                 "Dv2_series", "Dv3_series", "DSv2_series", "Dsv3_series", "Ev3_series",
                 "Esv3_series", "F_series", "Fs_series", "Fsv2_series", "M_series", "D_series",
@@ -792,6 +792,26 @@ def tune_assessment_to_budget(
         return assessment, history, True
     direction = "高于" if target_max is not None and annual_total > target_max else "低于"
     _record("initial", f"初始 Portal 默认评估{direction}目标区间", assessment, False)
+
+    current_props = assessment_body["properties"]
+    # 如有必要，调整存储冗余级别以微调成本
+    for redundancy in ["LocallyRedundant", "GeoRedundant"]:
+        if redundancy == current_props.get("azureStorageRedundancy", ""):
+            continue
+        test_body = {**assessment_body, "properties": {**assessment_body["properties"], "azureStorageRedundancy": redundancy}}
+        test_result = azure_arm_request("PUT", assessment_path, token, test_body)
+        test_monthly = assessment_monthly_total_cost(test_result)
+        test_annual = test_monthly * 12
+        if target_min and test_annual < target_min:
+            continue
+        if target_max and test_annual > target_max:
+            continue
+        assessment_body = test_body
+        assessment = test_result
+        annual_total = test_annual
+        progress(f"  调整为存储冗余 {redundancy}: 年化 {_format_usd(test_annual)} ✓")
+        _record("storage-redundancy", f"调整为存储冗余 {redundancy}", assessment, True)
+        return assessment, history, True
 
     for round_index in range(1, 4):
         round_name = f"round-{round_index}"
