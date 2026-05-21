@@ -22,20 +22,12 @@ from config import BUILTIN_CSV_PATH
 from documents.pov import has_meaningful_pov_team
 from frontend.ui import render_auto_poe_result, render_readiness, render_workflow_steps
 from pipeline import (
-    HAS_PRICING_AUTOMATION,
-    PricingExportResult,
     format_auto_poe_log,
     get_existing_solution_text,
     run_full_auto_poe,
     should_display_auto_poe_log,
 )
 from session import persist_session_state
-
-try:
-    from pricing_automation import is_browser_profile_ready
-except ImportError:
-    def is_browser_profile_ready():
-        return False
 
 def render_full_auto_poe_area(
     current_doc_type: str,
@@ -180,26 +172,6 @@ def render_full_auto_poe_area(
         else:
             st.error("Azurecsvtemplate.csv 未找到")
 
-    # ── 浏览器 Profile 状态（价格计算器自动化）──
-    if HAS_PRICING_AUTOMATION:
-        browser_ready = is_browser_profile_ready()
-        browser_col1, browser_col2 = st.columns([2, 1])
-        with browser_col1:
-            if browser_ready:
-                st.caption("🌐 价格计算器浏览器 Profile 已就绪")
-            else:
-                st.caption("🌐 价格计算器浏览器 Profile 未初始化（首次需手动登录）")
-        with browser_col2:
-            if st.button("初始化浏览器" if not browser_ready else "重新登录", key="btn_init_browser", use_container_width=True):
-                with st.spinner("正在打开浏览器，请在弹出窗口中登录 Azure..."):
-                    try:
-                        from pricing_automation import initialize_browser_profile
-                        initialize_browser_profile()
-                        st.success("✅ 浏览器 Profile 已保存")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"浏览器初始化失败: {e}")
-
     workflow_ready = all(item[1] for item in readiness_items)
 
     if st.button(
@@ -294,12 +266,6 @@ def render_full_auto_poe_area(
                     "solution_file_name": result["solution"]["file_name"],
                     "pov_file_name": result["pov"]["file_name"],
                     "assessment_file_name": result["assessment"]["file_name"],
-                    "pricing_file_name": result["pricing"]["file_name"] if result.get("pricing") else None,
-                    "pricing_fallbacks": [
-                        f"{fb.original_service}({fb.original_sku})→{fb.resolved_sku}"
-                        for fb in (result.get("pricing_result") or PricingExportResult()).fallbacks
-                        if fb.resolved_service != "(跳过)"
-                    ] if HAS_PRICING_AUTOMATION else [],
                     "project_name": result["migrate"]["project_name"],
                     "assessment_name": result["migrate"]["assessment_name"],
                     "machine_count": len(result["migrate"].get("assessed_machines", [])),
@@ -328,8 +294,6 @@ def render_full_auto_poe_area(
             ("POV 文档", result.get("pov_file_name") or "-"),
             ("迁移评估文档", result.get("assessment_file_name") or "-"),
         ]
-        if result.get("pricing_file_name"):
-            generated_items.append(("价格估算表", result.get("pricing_file_name")))
         render_auto_poe_result(
             customer_name=result.get("customer_name") or customer_name.strip() or account_name.strip() or "该客户",
             generated_items=generated_items,
@@ -347,9 +311,6 @@ def render_full_auto_poe_area(
         )
         if budget_target and not result.get("budget_target_met", True):
             st.warning("自动调整 3 轮后仍未落入用户预估年消耗的档次区间，请在 Azure Portal 的评估设置中手动调整。")
-        pricing_fallbacks = result.get("pricing_fallbacks", [])
-        if pricing_fallbacks:
-            st.warning(f"价格计算器资源降级: {'; '.join(pricing_fallbacks)}")
         finish_time = st.session_state.get("auto_poe_finish_time")
         if finish_time:
             st.info(f"✅ 任务完成时间：{finish_time}")

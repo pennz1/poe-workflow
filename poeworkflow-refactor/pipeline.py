@@ -14,25 +14,11 @@ from azure.migrate import (
     run_azure_migrate_assessment,
 )
 from budget.parser import parse_annual_budget_usd
-from config import BUDGET_TIERS
 from documents.infra import create_infra_docx
 from documents.pov import build_pov_prompt, create_pov_docx, has_meaningful_pov_team
 from documents.solution import create_solution_docx
 from llm.client import call_azure_openai
 from llm.prompts import POV_SYSTEM_PROMPT, build_infra_system_prompt, build_solution_system_prompt
-
-try:
-    from pricing_automation import (
-        PricingExportResult,
-        run_pricing_export,
-    )
-    HAS_PRICING_AUTOMATION = True
-except ImportError:
-    HAS_PRICING_AUTOMATION = False
-
-    class PricingExportResult:
-        def __init__(self):
-            self.fallbacks = []
 
 def date_prefix():
     """返回当前日期前缀，如 0225"""
@@ -294,52 +280,11 @@ def run_full_auto_poe(
     st.session_state["pov_text"] = pov_artifact["content"]
     st.session_state["pov_source_doc_type"] = current_doc_type
 
-    # ── Step 2.5: Pricing Calculator 自动导出 ──
-    pricing_artifact = None
-    pricing_result = None
-    if HAS_PRICING_AUTOMATION:
-        progress("")
-        progress("**三、Azure 价格估算表**")
-        progress("  正在自动化 Azure Pricing Calculator 导出...")
-        try:
-            annual_budget_val = parse_annual_budget_usd(annual_budget_text) or 0.0
-            # 计算预算上限（下一个档位），防止超标
-            budget_cap = 0.0
-            if annual_budget_val > 0:
-                for tier in BUDGET_TIERS:
-                    if tier > annual_budget_val:
-                        budget_cap = tier
-                        break
-                if budget_cap == 0:
-                    budget_cap = annual_budget_val * 1.5  # 最高档位用 1.5 倍封顶
-            pricing_result = run_pricing_export(
-                solution_text=solution_artifact["content"],
-                annual_budget=annual_budget_val,
-                account_name=account_name,
-                progress=progress,
-                headed=False,
-                budget_cap=budget_cap,
-            )
-            if pricing_result.xlsx_bytes:
-                pricing_artifact = {
-                    "file_name": f"{account_name}-Azure calculator.xlsx",
-                    "bytes": pricing_result.xlsx_bytes,
-                }
-                progress(f"  :green[✅ 已导出] `{pricing_artifact['file_name']}`")
-                if pricing_result.fallbacks:
-                    fallback_msgs = [f"{fb.original_service}({fb.original_sku})→{fb.resolved_sku}" for fb in pricing_result.fallbacks if fb.resolved_service != "(跳过)"]
-                    if fallback_msgs:
-                        progress(f"  ⚠️ 资源降级: {'; '.join(fallback_msgs)}")
-            else:
-                progress(f"  ⚠️ 价格导出未成功: {pricing_result.error or '未知错误'}")
-        except Exception as e:
-            progress(f"  ⚠️ 价格导出异常（不影响其他文档）: {e}")
-
     # 从解决方案文档中提取主要区域，用于评估目标地区
     target_location = _extract_dominant_region(solution_artifact["content"])
 
     progress("")
-    progress("**四、Azure Migrate 评估报告**")
+    progress("**三、Azure Migrate 评估报告**")
     migrate_result = run_azure_migrate_assessment(
         token, subscription_id, resource_group, account_name, assessment_name, annual_budget_text, progress,
         target_location=target_location,
@@ -360,8 +305,6 @@ def run_full_auto_poe(
 
     # 打包所有交付物
     all_artifacts = [solution_artifact, pov_artifact, assessment_artifact]
-    if pricing_artifact:
-        all_artifacts.append(pricing_artifact)
     zip_bytes = create_poe_zip(all_artifacts)
     progress(f"成功生成 POE 套件：{account_name}-POE-Complete.zip（{len(all_artifacts)} 个文件）")
     return {
@@ -370,7 +313,5 @@ def run_full_auto_poe(
         "solution": solution_artifact,
         "pov": pov_artifact,
         "assessment": assessment_artifact,
-        "pricing": pricing_artifact,
-        "pricing_result": pricing_result,
         "migrate": migrate_result,
     }
