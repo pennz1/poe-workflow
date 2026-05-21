@@ -11,7 +11,7 @@ from documents.infra import create_infra_docx
 from documents.pov import build_pov_prompt, create_pov_docx, has_meaningful_pov_team
 from documents.solution import create_solution_docx
 from llm.client import call_azure_openai
-from llm.prompts import CSV_SYSTEM_PROMPT, INFRA_SYSTEM_PROMPT, POV_SYSTEM_PROMPT, SOLUTION_SYSTEM_PROMPT
+from llm.prompts import CSV_SYSTEM_PROMPT, POV_SYSTEM_PROMPT, build_infra_system_prompt, build_solution_system_prompt
 from session import persist_session_state
 
 def render_solution_tab(customer_name, account_name, budget, customer_bg, solution_ref, infra_ref):
@@ -102,7 +102,11 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                 with c_regen:
                     if st.button("AI 重新生成", type="primary", use_container_width=True, key="btn_regen_import"):
                         cust = customer_name.strip() or st.session_state.get("customer_name", "未命名客户")
-                        system_prompt = SOLUTION_SYSTEM_PROMPT if current_doc_type == "AI" else INFRA_SYSTEM_PROMPT
+                        system_prompt = (
+                            build_solution_system_prompt(False)
+                            if current_doc_type == "AI"
+                            else build_infra_system_prompt(False)
+                        )
                         ref_text = solution_ref if current_doc_type == "AI" else infra_ref
                         user_ctx = (
                             f"## 客户信息\n- **客户名称**：{cust}\n\n"
@@ -189,7 +193,7 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                                     f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
                                     f"{solution_ref}"
                                 )
-                            sol_text = call_azure_openai(SOLUTION_SYSTEM_PROMPT, user_ctx)
+                            sol_text = call_azure_openai(build_solution_system_prompt(False), user_ctx)
                             st.session_state["solution_text"] = sol_text
                             st.session_state["customer_name"] = customer_name
                             st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
@@ -236,7 +240,7 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                                     f"\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
                                     f"{infra_ref}"
                                 )
-                            infra_text = call_azure_openai(INFRA_SYSTEM_PROMPT, user_ctx)
+                            infra_text = call_azure_openai(build_infra_system_prompt(False), user_ctx)
                             st.session_state["infra_text"] = infra_text
                             st.session_state["customer_name"] = customer_name
                             st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name

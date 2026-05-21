@@ -19,7 +19,7 @@ from documents.infra import create_infra_docx
 from documents.pov import build_pov_prompt, create_pov_docx, has_meaningful_pov_team
 from documents.solution import create_solution_docx, generate_svg_architecture
 from llm.client import call_azure_openai
-from llm.prompts import INFRA_SYSTEM_PROMPT, POV_SYSTEM_PROMPT, SOLUTION_SYSTEM_PROMPT
+from llm.prompts import POV_SYSTEM_PROMPT, build_infra_system_prompt, build_solution_system_prompt
 
 try:
     from pricing_automation import (
@@ -50,13 +50,21 @@ def generate_solution_artifact(
     customer_bg: str,
     solution_ref: str,
     infra_ref: str,
+    annual_budget: float = 0,
 ) -> Dict[str, Any]:
-    system_prompt = SOLUTION_SYSTEM_PROMPT if current_doc_type == "AI" else INFRA_SYSTEM_PROMPT
+    is_large_customer = annual_budget >= 100_000
+    system_prompt = (
+        build_solution_system_prompt(is_large_customer=is_large_customer)
+        if current_doc_type == "AI"
+        else build_infra_system_prompt(is_large_customer=is_large_customer)
+    )
     ref_text = solution_ref if current_doc_type == "AI" else infra_ref
     user_ctx = (
         f"## 客户信息\n- **客户名称**：{customer_name}\n\n"
         f"## 客户背景\n{customer_bg}"
     )
+    if is_large_customer:
+        user_ctx += "\n\n该客户为年度预算超10万美元的大客户，请提供更详尽、更严谨的架构方案。"
     if ref_text:
         user_ctx += (
             "\n\n---\n\n## 【参考模板文档 —— 请学习其风格和结构，不要照抄具体数据】\n\n"
@@ -248,7 +256,13 @@ def run_full_auto_poe(
         progress(f"  :green[✅ 已复用] `{solution_artifact['file_name']}`")
     else:
         solution_artifact = generate_solution_artifact(
-            current_doc_type, customer_name, account_name, customer_bg, solution_ref, infra_ref
+            current_doc_type,
+            customer_name,
+            account_name,
+            customer_bg,
+            solution_ref,
+            infra_ref,
+            annual_budget=parse_annual_budget_usd(annual_budget_text) or 0.0,
         )
         progress(f"  :green[✅ 已生成] `{solution_artifact['file_name']}`")
 

@@ -28,7 +28,8 @@ def extract_template_text(path: str) -> str:
 # ──────────────────────────────────────────────
 # Prompt 模板
 # ──────────────────────────────────────────────
-SOLUTION_SYSTEM_PROMPT = (
+def build_solution_system_prompt(is_large_customer: bool = False) -> str:
+    base_prompt = (
     "你是一位顶级的 Microsoft Azure AI 解决方案架构师。"
     "请根据用户提供的【客户名称】和【背景信息】，生成一份完整、专业的 AI 售前解决方案架构文档。\n\n"
     "**标题要求（极其重要）：** 你的输出的第一行必须是一个 `#` 标题，格式为: `# [客户名称] - [具体方案名称]`。"
@@ -91,9 +92,22 @@ SOLUTION_SYSTEM_PROMPT = (
     "- 内容要精炼简洁，严格对齐参考模板的篇幅，不要更长\n"
     "- 表格必须使用 Markdown 表格语法\n\n"
     "**重要：** 下方会提供一份【参考模板文档】，你必须严格学习它的写作风格（段落叙述，非列表）、内容篇幅和表格格式。以完全相同的结构和风格为新客户生成内容。"
-)
+    )
+    if not is_large_customer:
+        return base_prompt
+    return (
+        base_prompt
+        + "\n\n**大客户详细模式（年度预算超10万美元时启用）：**\n"
+        + "本次输出必须在保持上述 8 个章节结构和段落风格的前提下，显著提升方案详细度和架构严谨性。\n"
+        + "全文目标文字量为 1500-2500 字，不能因为篇幅增加而使用项目符号列表。\n"
+        + "第五章详细解决方案设计中的资源用途需扩展为 8-12 个 Azure 资源行，并覆盖模型推理、知识检索、数据处理、API 治理、安全合规、监控运维等关键能力。\n"
+        + "第八章 Azure 资源需求表必须列出 8-12 行真实存在的 Azure 服务与 SKU，严禁编造不存在的 Azure 服务、产品名称、区域或 SKU。\n"
+        + "架构说明必须严格合理：数据流要有明确方向，服务间集成必须说明清楚使用的协议、接口或集成方式，例如 REST API、Private Endpoint、Managed Identity、Event Hubs 或 SDK 调用。\n"
+        + "安全架构与集成架构必须与所列资源一一对应，不能出现资源清单里没有依据的组件，也不能只做泛泛描述。\n"
+    )
 
-INFRA_SYSTEM_PROMPT = (
+def build_infra_system_prompt(is_large_customer: bool = False) -> str:
+    base_prompt = (
     "你是一位顶级的 Microsoft Azure 基础设施解决方案架构师。"
     "请根据用户提供的【客户名称】和【背景信息】，生成一份完整、专业的 Azure 基础设施解决方案架构文档。\n\n"
     "**标题要求（极其重要）：** 你的输出的第一行必须是一个 `#` 标题，格式为: `# [客户名称] - [具体方案名称]`。"
@@ -148,7 +162,8 @@ INFRA_SYSTEM_PROMPT = (
     "- 内容要精炼简洁，严格对齐参考模板的篇幅，不要更长\n"
     "- 表格必须使用 Markdown 表格语法\n\n"
     "**重要：** 下方会提供一份【参考模板文档】，你必须严格学习它的写作风格（段落叙述，非列表）、内容篇幅和表格格式。以完全相同的结构和风格为新客户生成内容。"
-)
+    )
+    return base_prompt
 
 POV_SYSTEM_PROMPT = (
     "你是一位经验丰富的 Microsoft 技术方案交付专家。"
@@ -281,5 +296,4 @@ CSV_SYSTEM_PROMPT = (
     "**输出格式：**\n"
     "只输出纯粹的 CSV 内容（包含表头行），不要输出 Markdown 代码块标记、解释性文字或其他内容。"
 )
-
 
