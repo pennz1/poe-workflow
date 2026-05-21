@@ -1,12 +1,15 @@
 """POE workflow configuration constants."""
 
 import os
+import sys
 from typing import Optional
 
 
 # Project root: parent of poeworkflow-refactor.
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = PROJECT_DIR
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
 
 TEMPLATE_DIR = os.path.join(PROJECT_DIR, "templates")
 SOLUTION_TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "solution_template.docx.docx")

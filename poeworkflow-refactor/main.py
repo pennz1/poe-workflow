@@ -3,14 +3,6 @@
 import os
 
 import streamlit as st
-from frontend.ui import (
-    load_desktop_theme,
-    render_app_header,
-    render_pill,
-    render_section_head,
-    render_template_status,
-)
-
 from config import (
     INFRA_TEMPLATE_PATH,
     MIGRATE_TEMPLATE_PATH,
@@ -18,6 +10,13 @@ from config import (
     PROJECT_DIR,
     SOLUTION_TEMPLATE_PATH,
     check_secrets,
+)
+from frontend.ui import (
+    load_desktop_theme,
+    render_app_header,
+    render_pill,
+    render_section_head,
+    render_template_status,
 )
 from llm.prompts import extract_template_text
 from pipeline import date_prefix
