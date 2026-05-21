@@ -144,25 +144,85 @@ def render_device_code_login(user_code: str, verify_url: str) -> None:
         .poe-device-login {{
             display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 12px 16px;
+            gap: 10px;
+            padding: 10px 14px;
             border-radius: 8px;
             border: 1px solid oklch(86.5% 0.014 248);
             background: oklch(99.2% 0.003 248);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
             font-size: 14px;
+        }}
+        .poe-device-code {{
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: 0.5px;
             color: oklch(39% 0.15 250);
+            background: oklch(94% 0.01 250);
+            padding: 3px 10px;
+            border-radius: 4px;
+            user-select: all;
+        }}
+        .poe-device-copy-btn {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid oklch(80% 0.05 250);
+            border-radius: 6px;
+            background: oklch(100% 0 0);
+            cursor: pointer;
+            font-size: 13px;
+            padding: 0;
+            flex-shrink: 0;
+        }}
+        .poe-device-copy-btn:hover {{
+            background: oklch(94% 0.01 250);
+        }}
+        .poe-device-copy-btn.copied {{
+            background: oklch(48% 0.105 152);
+            border-color: oklch(48% 0.105 152);
+        }}
+        .poe-device-link-btn {{
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 14px;
+            border-radius: 6px;
+            border: 1px solid oklch(58% 0.14 252);
+            background: oklch(58% 0.14 252);
+            color: #fff;
+            font-weight: 600;
+            font-size: 13px;
+            text-decoration: none;
+            cursor: pointer;
+            margin-left: auto;
+            flex-shrink: 0;
+        }}
+        .poe-device-link-btn:hover {{
+            background: oklch(48% 0.12 252);
+            border-color: oklch(48% 0.12 252);
+        }}
+        .poe-device-hint {{
+            color: oklch(60% 0.02 250);
+            font-size: 12px;
+            flex-shrink: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }}
         </style>
-        <div class="poe-device-login" id="poe-login-status">
-            正在准备登录...
+        <div class="poe-device-login">
+            <span class="poe-device-code">{code}</span>
+            <button type="button" class="poe-device-copy-btn" id="poe-copy-btn" title="复制验证码">📋</button>
+            <span class="poe-device-hint" id="poe-hint">已自动复制</span>
+            <a class="poe-device-link-btn" href="{url}" target="_blank" rel="noopener noreferrer">打开 Microsoft 登录 →</a>
         </div>
         <script>
         (function() {{
             const code = "{code}";
-            const url = "{url}";
-            const el = document.getElementById("poe-login-status");
+            const btn = document.getElementById("poe-copy-btn");
+            const hint = document.getElementById("poe-hint");
 
             const copyToClipboard = async function(text) {{
                 try {{
@@ -182,19 +242,29 @@ def render_device_code_login(user_code: str, verify_url: str) -> None:
                 }}
             }};
 
+            // 自动复制
             (async function() {{
                 const ok = await copyToClipboard(code);
                 if (ok) {{
-                    el.textContent = "验证码已复制 " + code + "，正在打开登录页面...";
-                    setTimeout(function() {{
-                        window.open(url, "_blank", "noopener,noreferrer");
-                    }}, 800);
+                    hint.textContent = "已自动复制";
                 }} else {{
-                    el.innerHTML = "请手动复制验证码 <strong>" + code + "</strong> 并前往 <a href=\\"" + url + "\\" target=\\"_blank\\">Microsoft 登录</a>";
+                    hint.textContent = "请手动复制";
                 }}
             }})();
+
+            // 手动复制按钮
+            btn.addEventListener("click", async function() {{
+                await copyToClipboard(code);
+                btn.textContent = "✓";
+                btn.classList.add("copied");
+                hint.textContent = "已复制";
+                setTimeout(function() {{
+                    btn.textContent = "📋";
+                    btn.classList.remove("copied");
+                }}, 1500);
+            }});
         }})();
         </script>
         """,
-        height=50,
+        height=52,
     )
