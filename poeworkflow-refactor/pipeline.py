@@ -29,6 +29,28 @@ def date_prefix():
 # 全自动 POE：MSAL 登录与 Azure ARM API
 # ──────────────────────────────────────────────
 
+def _extract_resource_section(content: str) -> str:
+    """从解决方案文档中提取第八章资源需求表。"""
+    lines = content.split("\n")
+    start = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("## 八、") or stripped.startswith("## 8.") or stripped == "## 八、资源架构":
+            start = i
+            break
+    if start is None:
+        return ""
+    # 从标题行开始收集，直到遇到下一个 ## 标题或结束
+    section_lines = []
+    for i in range(start, len(lines)):
+        line = lines[i]
+        stripped = line.strip()
+        if i > start and (stripped.startswith("## ") or stripped.startswith("# ")):
+            break
+        section_lines.append(line)
+    return "\n".join(section_lines).strip()
+
+
 def generate_solution_artifact(
     current_doc_type: str,
     customer_name: str,
@@ -252,6 +274,19 @@ def run_full_auto_poe(
     st.session_state[target_key] = solution_artifact["content"]
     st.session_state["customer_name"] = customer_name
     st.session_state["account_name"] = account_name
+
+    # 打印第八章资源需求表，方便用户提前查看资源清单
+    if current_doc_type == "AI":
+        resource_section = _extract_resource_section(solution_artifact["content"])
+        if resource_section:
+            progress("---")
+            progress("**📋 资源需求清单（第八章）**")
+            progress("")
+            for line in resource_section.split("\n"):
+                progress(line)
+            progress("")
+            progress("**以上为方案文档中的资源需求，可据此在 Azure Pricing Calculator 手动制作价格表。**")
+            progress("---")
 
     progress("")
     progress("**二、POV 部署计划文档**")
