@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 def _html(text: Any) -> str:
@@ -15,12 +14,42 @@ def load_desktop_theme(app_dir: str) -> None:
     st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
 
-def render_app_header() -> None:
+def inject_theme_toggle_js() -> None:
+    """Inject JS to sync the data-theme attribute on <html> based on session toggle."""
     st.markdown(
         """
+        <script>
+        (function() {
+            const root = document.documentElement;
+            // Check for theme override stored in sessionStorage
+            const stored = window.sessionStorage.getItem('poe-theme');
+            if (stored) {
+                root.setAttribute('data-theme', stored);
+            }
+            // Expose a function for Streamlit to call
+            window.setPoeTheme = function(theme) {
+                if (theme === 'auto') {
+                    root.removeAttribute('data-theme');
+                    window.sessionStorage.removeItem('poe-theme');
+                } else {
+                    root.setAttribute('data-theme', theme);
+                    window.sessionStorage.setItem('poe-theme', theme);
+                }
+            };
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_app_header(version: str = "") -> None:
+    version_badge = f'<span class="poe-badge" data-tone="version">v{version}</span>' if version else ""
+    st.markdown(
+        f"""
         <section class="poe-shell-header" aria-label="POE workflow header">
             <div>
-                <p class="poe-kicker">POE Workflow Console</p>
+                <p class="poe-kicker">POE Workflow Console {version_badge}</p>
                 <h1 class="poe-title">微软客户 POE 工作台</h1>
                 <p class="poe-subtitle">
                     输入客户背景，生成方案文档、POV 计划、Azure Migrate 评估和价格表交付物。
@@ -135,136 +164,12 @@ def render_auto_poe_result(
     )
 
 
-def render_device_code_login(user_code: str, verify_url: str) -> None:
-    code = _html(user_code)
-    url = _html(verify_url)
-    components.html(
-        f"""
-        <style>
-        .poe-device-login {{
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            border-radius: 8px;
-            border: 1px solid oklch(86.5% 0.014 248);
-            background: oklch(99.2% 0.003 248);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-            font-size: 14px;
-        }}
-        .poe-device-code {{
-            font-weight: 700;
-            font-size: 15px;
-            letter-spacing: 0.5px;
-            color: oklch(39% 0.15 250);
-            background: oklch(94% 0.01 250);
-            padding: 3px 10px;
-            border-radius: 4px;
-            user-select: all;
-        }}
-        .poe-device-copy-btn {{
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            border: 1px solid oklch(80% 0.05 250);
-            border-radius: 6px;
-            background: oklch(100% 0 0);
-            cursor: pointer;
-            font-size: 13px;
-            padding: 0;
-            flex-shrink: 0;
-        }}
-        .poe-device-copy-btn:hover {{
-            background: oklch(94% 0.01 250);
-        }}
-        .poe-device-copy-btn.copied {{
-            background: oklch(48% 0.105 152);
-            border-color: oklch(48% 0.105 152);
-        }}
-        .poe-device-link-btn {{
-            display: inline-flex;
-            align-items: center;
-            padding: 5px 14px;
-            border-radius: 6px;
-            border: 1px solid oklch(58% 0.14 252);
-            background: oklch(58% 0.14 252);
-            color: #fff;
-            font-weight: 600;
-            font-size: 13px;
-            text-decoration: none;
-            cursor: pointer;
-            margin-left: auto;
-            flex-shrink: 0;
-        }}
-        .poe-device-link-btn:hover {{
-            background: oklch(48% 0.12 252);
-            border-color: oklch(48% 0.12 252);
-        }}
-        .poe-device-hint {{
-            color: oklch(60% 0.02 250);
-            font-size: 12px;
-            flex-shrink: 1;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }}
-        </style>
-        <div class="poe-device-login">
-            <span class="poe-device-code">{code}</span>
-            <button type="button" class="poe-device-copy-btn" id="poe-copy-btn" title="复制验证码">📋</button>
-            <span class="poe-device-hint" id="poe-hint">已自动复制</span>
-            <a class="poe-device-link-btn" href="{url}" target="_blank" rel="noopener noreferrer">打开 Microsoft 登录 →</a>
-        </div>
-        <script>
-        (function() {{
-            const code = "{code}";
-            const btn = document.getElementById("poe-copy-btn");
-            const hint = document.getElementById("poe-hint");
-
-            const copyToClipboard = async function(text) {{
-                try {{
-                    await navigator.clipboard.writeText(text);
-                    return true;
-                }} catch (e) {{
-                    const ta = document.createElement("textarea");
-                    ta.value = text;
-                    ta.setAttribute("readonly", "");
-                    ta.style.position = "fixed";
-                    ta.style.opacity = "0";
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand("copy");
-                    ta.remove();
-                    return true;
-                }}
-            }};
-
-            // 自动复制
-            (async function() {{
-                const ok = await copyToClipboard(code);
-                if (ok) {{
-                    hint.textContent = "已自动复制";
-                }} else {{
-                    hint.textContent = "请手动复制";
-                }}
-            }})();
-
-            // 手动复制按钮
-            btn.addEventListener("click", async function() {{
-                await copyToClipboard(code);
-                btn.textContent = "✓";
-                btn.classList.add("copied");
-                hint.textContent = "已复制";
-                setTimeout(function() {{
-                    btn.textContent = "📋";
-                    btn.classList.remove("copied");
-                }}, 1500);
-            }});
-        }})();
-        </script>
-        """,
-        height=52,
-    )
+def render_device_code_login(user_code: str, verify_url: str, container=None) -> None:
+    """使用原生 Streamlit 组件渲染设备码登录区域（解决 iframe 剪贴板限制和窄列宽问题）。"""
+    target = container if container is not None else st
+    target.info(f"请复制验证码并在浏览器中完成登录，等待自动跳转。", icon="🔐")
+    col_code, col_btn = target.columns([2, 1])
+    with col_code:
+        st.code(user_code, language=None)
+    with col_btn:
+        st.link_button("打开 Microsoft 登录", verify_url, use_container_width=True, type="primary")

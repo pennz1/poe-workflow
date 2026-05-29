@@ -24,6 +24,7 @@ AZURE_MANAGEMENT_ENDPOINT = "https://management.azure.com"
 AZURE_RESOURCE_API_VERSION = "2022-12-01"
 AZURE_PROVIDER_API_VERSION = "2021-04-01"
 AZURE_MIGRATE_API_VERSION = "2024-01-15"
+AZURE_MIGRATE_V2_API_VERSION = "2025-09-09-preview"
 AZURE_MIGRATE_REPORT_API_VERSION = "2019-10-01"
 AZURE_OFFAZURE_API_VERSION = "2023-06-06"
 AZURE_MIGRATE_PROJECTS_API_VERSION = "2018-09-01-preview"
@@ -35,7 +36,7 @@ BUILTIN_CSV_PATH = os.path.join(PROJECT_DIR, "Azurecsvtemplate.csv")
 PERSIST_DIR = os.environ.get("PERSIST_DIR", PROJECT_DIR)
 os.makedirs(PERSIST_DIR, exist_ok=True)
 TIER_CACHE_PATH = os.path.join(PERSIST_DIR, ".tier_cache.json")
-BUDGET_TIERS = [15_000, 50_000, 100_000, 250_000]
+BUDGET_TIERS = [15_000, 20_000, 60_000, 120_000, 260_000]
 
 _PERSIST_KEYS = [
     "azure_token",
@@ -53,6 +54,11 @@ _PERSIST_KEYS = [
     "customer_name",
     "account_name",
     "budget",
+    "customer_bg",
+    "pov_start_date",
+    "pov_end_date",
+    "_pov_tech_lead",
+    "_pov_architect",
     "doc_type",
     "pov_source_doc_type",
     "pov_vendor_team",

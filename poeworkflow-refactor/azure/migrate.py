@@ -11,23 +11,26 @@ import requests
 from azure.arm import azure_arm_list, azure_arm_request, register_azure_provider
 from budget.parser import _format_usd, parse_annual_budget_usd
 from budget.tier import (
+    budget_target_range,
+    ensure_csv_disk_columns,
+    format_budget_target_range,
     get_machine_ids_for_tier,
+    jitter_csv_performance,
     learn_tier_machine_selections,
     load_builtin_csv_template,
     load_tier_cache,
     prefix_csv_server_names,
     save_tier_cache,
-    snap_budget_to_tier,
     _safe_csv_prefix,
 )
 from config import (
     AZURE_MIGRATE_API_VERSION,
+    AZURE_MIGRATE_V2_API_VERSION,
     AZURE_MIGRATE_DEFAULT_TARGET_LOCATION,
     AZURE_MIGRATE_PROJECTS_API_VERSION,
     AZURE_MIGRATE_REPORT_API_VERSION,
     AZURE_OFFAZURE_API_VERSION,
     AZURE_RESOURCE_API_VERSION,
-    BUDGET_TIERS,
 )
 
 def _date_prefix():
@@ -679,6 +682,451 @@ def _build_assessment_body(target_location: Optional[str] = None) -> Dict[str, A
     }
 
 
+def _build_v2_arg_query(import_site_id: str, machine_ids: List[str]) -> str:
+    """构建新版评估使用的 Azure Resource Graph 查询，用于筛选指定服务器。"""
+    machine_id_list = ", ".join(f'"{mid.lower()}"' for mid in machine_ids)
+    return (
+        "migrateresources\n"
+        '        | where type in~ ("microsoft.offazure/vmwaresites/machines", '
+        '"microsoft.offazure/hypervsites/machines", '
+        '"microsoft.offazure/serversites/machines", '
+        '"microsoft.offazure/importsites/machines")\n'
+        f'        | where id has "{import_site_id}"\n'
+        "        | extend type=tolower(type)\n"
+        "        | extend id = tolower(id)\n"
+        f"        | where id in~ ({machine_id_list})"
+    )
+
+
+def _build_assessment_body_v2(
+    import_site_id: str,
+    machine_ids: List[str],
+    target_location: Optional[str] = None,
+    customer_name: str = "",
+) -> Dict[str, Any]:
+    """构建新版 Azure VM 评估的请求体（project-level，无需 group）。"""
+    # 客户级确定性差异化：初始评估参数不同，避免同 tier 客户最终金额完全一致。
+    # discount 是直接价格乘数；scalingFactor 会影响 SKU 推荐边界。
+    scaling_factor = 1.3
+    discount_percentage = 0.0
+    if customer_name:
+        import hashlib as _hashlib
+        import random as _rng
+        seed = int(_hashlib.md5(customer_name.encode()).hexdigest(), 16) % (2**32)
+        rng = _rng.Random(seed)
+        scaling_factor = round(rng.uniform(1.15, 1.45), 2)
+        discount_percentage = round(rng.uniform(0, 6), 2)
+
+    return {
+        "properties": {
+            "details": {
+                "assessmentType": "MachineAssessment",
+            },
+            "scope": {
+                "scopeType": "AzureResourceGraphQuery",
+                "azureResourceGraphQuery": _build_v2_arg_query(import_site_id, machine_ids),
+            },
+            "settings": {
+                "azureLocation": target_location or AZURE_MIGRATE_DEFAULT_TARGET_LOCATION,
+                "azurePricingTier": "Standard",
+                "azureStorageRedundancy": "LocallyRedundant",
+                "scalingFactor": scaling_factor,
+                "currency": "USD",
+                "azureHybridUseBenefit": "Yes",
+                "linuxAzureHybridUseBenefit": "Yes",
+                "azureSecurityOfferingType": "MDC",
+                "discountPercentage": discount_percentage,
+                "sizingCriterion": "PerformanceBased",
+                "azureDiskTypes": ["Premium", "StandardSSD", "PremiumV2"],
+                "azureVmFamilies": [
+                    "Dadsv5_series", "Dasv4_series", "Dasv5_series",
+                    "Ddsv4_series", "Ddsv5_series", "Ddv5_series",
+                    "Dsv4_series", "Dsv5_series", "Dv5_series",
+                    "Edsv5_series", "Edv5_series", "Esv5_series", "Ev5_series",
+                    "Eadsv5_series", "Easv4_series", "Easv5_series",
+                    "Ebdsv5_series", "Ebsv5_series", "Edsv4_series", "Esv4_series",
+                    "Fs_series", "Fsv2_series",
+                    "Lasv3_series", "Lsv2_series", "Lsv3_series",
+                    "M_series", "Mdsv2_series", "Msv2_series", "Mv2_series",
+                    "Av2_series", "Dav4_series", "Ddv4_series", "Dv4_series",
+                    "Eav4_series", "Edv4_series", "Ev4_series", "F_series",
+                ],
+                "azureVmSecurityOptions": ["Standard", "TVM"],
+                "billingSettings": {"licensingProgram": "Retail", "subscriptionId": None},
+                "environmentType": "Production",
+                "performanceData": {
+                    "percentile": "Percentile95",
+                    "timeRange": "Day",
+                },
+                "savingsSettings": {
+                    "azureOfferCode": "MSAZR0003P",
+                    "savingsOptions": "RI3Year",
+                },
+                "vmUptime": {"daysPerMonth": 31, "hoursPerDay": 24},
+            },
+        },
+    }
+
+
+def wait_for_assessment_complete_v2(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    assessment_name: str,
+    token: str,
+    progress: Callable[[str], None],
+    timeout_seconds: int = 600,
+) -> Dict[str, Any]:
+    """等待新版 project-level 评估完成（status 在 properties.details.status）。"""
+    path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentprojects/{project_name}"
+        f"/assessments/{assessment_name}"
+        f"?api-version={AZURE_MIGRATE_V2_API_VERSION}"
+    )
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        assessment = azure_arm_request("GET", path, token)
+        details = assessment.get("properties", {}).get("details", {})
+        status = details.get("status", "Unknown")
+        if status == "Completed":
+            return assessment
+        if status in {"Invalid", "OutOfSync", "OutDated", "Deleted"}:
+            raise RuntimeError(f"Azure Migrate 评估状态异常：{status}")
+        progress(f"评估仍在计算中，当前状态：{status}")
+        time.sleep(15)
+    raise TimeoutError("等待 Azure Migrate 评估完成超时，请稍后在 Azure Portal 检查评估结果。")
+
+
+def _extract_machine_monthly_cost(machine: Dict[str, Any]) -> float:
+    """从单台 V2 assessed machine 中提取月成本。
+
+    V2 API 成本路径：recommendations[].totalCost[].costDetail[]
+    只取 name=TotalMonthlyCost 的条目，其余为组件明细（会重复计算）。
+    """
+    mp = machine.get("properties", {})
+
+    for rec in mp.get("recommendations", []):
+        rec_total_cost = rec.get("totalCost")
+        if isinstance(rec_total_cost, list):
+            for cost_group in rec_total_cost:
+                if isinstance(cost_group, dict):
+                    for detail in cost_group.get("costDetail", []):
+                        if str(detail.get("name", "")).lower() == "totalmonthlycost":
+                            try:
+                                return float(detail.get("value") or 0)
+                            except (TypeError, ValueError):
+                                pass
+
+        # 回退：sku 级别
+        for sku in rec.get("skus", []):
+            details = sku.get("details", {})
+            sku_total_cost = details.get("totalCost")
+            if isinstance(sku_total_cost, list):
+                for cost_group in sku_total_cost:
+                    if isinstance(cost_group, dict):
+                        for detail in cost_group.get("costDetail", []):
+                            if str(detail.get("name", "")).lower() == "totalmonthlycost":
+                                try:
+                                    return float(detail.get("value") or 0)
+                                except (TypeError, ValueError):
+                                    pass
+
+    return 0.0
+
+
+def assessment_monthly_total_cost_v2(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    assessment_name: str,
+    token: str,
+) -> float:
+    """从新版评估的 assessedMachines 聚合月总成本。
+
+    V2 API 成本路径：recommendations[].totalCost[].costDetail[].value
+    """
+    machines_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentprojects/{project_name}"
+        f"/assessments/{assessment_name}/assessedMachines"
+        f"?api-version={AZURE_MIGRATE_V2_API_VERSION}"
+    )
+    machines = azure_arm_list(machines_path, token)
+    total = 0.0
+    for machine in machines:
+        total += _extract_machine_monthly_cost(machine)
+    return total
+
+
+def download_assessment_report_v2(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    assessment_name: str,
+    token: str,
+) -> bytes:
+    """下载新版 project-level 评估报告。"""
+    download_url_path = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.Migrate/assessmentprojects/{project_name}"
+        f"/assessments/{assessment_name}/downloadUrl"
+        f"?api-version={AZURE_MIGRATE_V2_API_VERSION}"
+    )
+    payload = azure_arm_request("POST", download_url_path, token, {}, poll_lro=False)
+    report_url = payload.get("assessmentReportUrl")
+    if not report_url:
+        raise RuntimeError(f"Azure Migrate 未返回评估报告下载地址：{payload}")
+    response = requests.get(report_url, timeout=180)
+    if response.status_code >= 400:
+        raise RuntimeError(f"下载 Azure Migrate 评估报告失败：{response.status_code} {response.text[:800]}")
+    if not response.content:
+        raise RuntimeError("Azure Migrate 评估报告为空。")
+    return response.content
+
+
+def _put_assessment_v2_and_wait(
+    assessment_path: str,
+    assessment_body: Dict[str, Any],
+    token: str,
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    assessment_name: str,
+    progress: Callable[[str], None],
+    timeout_seconds: int = 600,
+) -> Dict[str, Any]:
+    """PUT 新版评估更新并等待计算完成，自动处理 405 冲突。"""
+    deadline = time.time() + timeout_seconds
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            azure_arm_request("PUT", assessment_path, token, assessment_body)
+            break
+        except Exception as e:
+            msg = str(e)
+            if "405" in msg or "under computation" in msg.lower() or "Cannot be updated" in msg:
+                if attempt == 1:
+                    progress(f"  ⏳ 评估仍在计算中，等待完成后再更新...")
+                time.sleep(15)
+                continue
+            raise
+
+    return wait_for_assessment_complete_v2(
+        subscription_id, resource_group, project_name, assessment_name, token, progress
+    )
+
+
+def tune_assessment_to_budget_v2(
+    subscription_id: str,
+    resource_group: str,
+    project_name: str,
+    assessment_name: str,
+    assessment_path: str,
+    assessment_body: Dict[str, Any],
+    annual_budget: Optional[float],
+    token: str,
+    progress: Callable[[str], None],
+    customer_name: str = "",
+) -> tuple[float, List[Dict[str, Any]], bool]:
+    """针对新版评估的预算调优，返回 (monthly_cost, history, met)。"""
+    history: List[Dict[str, Any]] = []
+    range_info = budget_target_range(annual_budget)
+    target_min = range_info["target_min"]
+    target_max = range_info["target_max"]
+    target_mid = range_info["target_mid"]
+    target_max_exclusive = bool(range_info["target_max_exclusive"])
+    target_anchor = target_mid
+    if target_min is not None and target_max is not None and customer_name:
+        import hashlib as _hashlib
+        import random as _rng
+        seed = int(_hashlib.md5(customer_name.encode()).hexdigest(), 16) % (2**32)
+        rng = _rng.Random(seed)
+        span = max(float(target_max) - float(target_min), 0)
+        # 留出上下边界缓冲，让自动调优落在区间内部且不同客户锚点不同。
+        target_anchor = float(target_min) + span * rng.uniform(0.35, 0.75)
+
+    def _above_target(annual_total: float) -> bool:
+        if target_max is None:
+            return False
+        return annual_total >= target_max if target_max_exclusive else annual_total > target_max
+
+    def _in_target_range(annual_total: float) -> bool:
+        if target_min is None or target_max is None:
+            return True
+        below_upper = annual_total < target_max if target_max_exclusive else annual_total <= target_max
+        return target_min <= annual_total and below_upper
+
+    def _get_monthly_cost() -> float:
+        return assessment_monthly_total_cost_v2(
+            subscription_id, resource_group, project_name, assessment_name, token
+        )
+
+    def _record(round_name: str, action: str, monthly_total: float, met: bool) -> None:
+        annual_total = monthly_total * 12
+        history.append({
+            "round": round_name,
+            "action": action,
+            "monthly_total": monthly_total,
+            "annual_total": annual_total,
+            "target_annual": annual_budget,
+            "target_min": target_min,
+            "target_max": target_max,
+            "target_anchor": target_anchor,
+            "met_target": met,
+        })
+
+    if annual_budget is None or annual_budget <= 0:
+        monthly_total = _get_monthly_cost()
+        progress(
+            "未填写可解析的预估年消耗，跳过价格校准。"
+            f"当前 Azure Migrate 年化估算：{_format_usd(monthly_total * 12)}"
+        )
+        _record("initial", "未填写可解析预算，未调整评估设置", monthly_total, True)
+        return monthly_total, history, True
+
+    monthly_total = _get_monthly_cost()
+    annual_total = monthly_total * 12
+    progress(
+        "Azure Migrate 当前年化估算："
+        f"{_format_usd(annual_total)}；目标区间：{format_budget_target_range(range_info)}"
+    )
+    if target_anchor is not None:
+        progress(f"客户专属调优目标锚点：{_format_usd(float(target_anchor))}")
+    if _in_target_range(annual_total):
+        _record("initial", "初始评估已在目标区间内", monthly_total, True)
+        return monthly_total, history, True
+    direction = "高于" if _above_target(annual_total) else "低于"
+    _record("initial", f"初始评估{direction}目标区间", monthly_total, False)
+
+    settings = assessment_body["properties"]["settings"]
+
+    def _next_patch(annual_total: float) -> tuple[str, Dict[str, Any]]:
+        if target_max is not None and target_anchor is not None and _above_target(annual_total):
+            # --- 成本高于目标：需要降低 ---
+            current_discount = float(settings.get("discountPercentage") or 0)
+            current_discount_factor = max(1 - current_discount / 100, 0.01)
+            undiscounted_annual = annual_total / current_discount_factor
+            required_discount = 100 * (1 - (target_anchor / max(undiscounted_annual, 1)))
+            next_discount = min(max(current_discount, required_discount), 99.0)
+            if next_discount > current_discount + 0.1:
+                return (
+                    f"设置折扣为 {next_discount:.2f}%，控制年化估算落入客户专属目标区间",
+                    {"discountPercentage": round(next_discount, 2)},
+                )
+            current_factor = float(settings.get("scalingFactor") or 1.3)
+            if current_factor > 1.0:
+                next_factor = max(1.0, current_factor * 0.8)
+                return (
+                    f"降低舒适因子到 {next_factor:.2f}，控制年化估算落入目标区间",
+                    {"scalingFactor": round(next_factor, 2)},
+                )
+            if settings.get("azureSecurityOfferingType") != "NO":
+                return ("关闭安全成本估算，控制年化估算落入目标区间", {"azureSecurityOfferingType": "NO"})
+            return ("已达到自动降价边界", {})
+
+        if target_anchor is None:
+            return ("未设置预算，不调整", {})
+
+        # --- 成本低于目标：需要提高 ---
+        # 计算差距比例，决定是否组合多个杠杆一次性应用
+        gap_ratio = float(target_anchor) / max(annual_total, 1)  # >1 means below target
+        combined_patch: Dict[str, Any] = {}
+        actions: list[str] = []
+
+        # 杠杆1：取消折扣
+        current_discount = float(settings.get("discountPercentage") or 0)
+        if current_discount > 0:
+            combined_patch["discountPercentage"] = 0
+            actions.append("取消折扣")
+
+        # 杠杆2：关闭 Hybrid Benefit（OS 许可成本计入估算）
+        if settings.get("azureHybridUseBenefit") != "No" or settings.get("linuxAzureHybridUseBenefit") != "No":
+            combined_patch["azureHybridUseBenefit"] = "No"
+            combined_patch["linuxAzureHybridUseBenefit"] = "No"
+            actions.append("关闭 Hybrid Benefit")
+
+        # 杠杆3：切换预留实例为按量计费（影响最大，约 2-3 倍）
+        if settings.get("savingsSettings", {}).get("savingsOptions") != "None":
+            combined_patch["savingsSettings"] = {"azureOfferCode": "MSAZR0003P", "savingsOptions": "None"}
+            actions.append("切换为按量计费")
+
+        # 如果差距大（>2x），一次性应用所有可用杠杆 + 拉满舒适因子
+        if gap_ratio > 2.0 and len(actions) > 1:
+            current_factor = float(settings.get("scalingFactor") or 1.3)
+            if current_factor < 2.0:
+                combined_patch["scalingFactor"] = 2.0
+                actions.append("舒适因子拉满到 2.0")
+            return ("、".join(actions) + "，大幅提高年化估算", combined_patch)
+
+        # 差距较小时，逐个应用杠杆（优先大杠杆）
+        if settings.get("savingsSettings", {}).get("savingsOptions") != "None":
+            return ("切换为按量计费以提高年化估算", {"savingsSettings": {"azureOfferCode": "MSAZR0003P", "savingsOptions": "None"}})
+        if settings.get("azureHybridUseBenefit") != "No" or settings.get("linuxAzureHybridUseBenefit") != "No":
+            return (
+                "关闭 Azure Hybrid Benefit，把 OS 许可成本计入估算",
+                {"azureHybridUseBenefit": "No", "linuxAzureHybridUseBenefit": "No"},
+            )
+        if current_discount > 0:
+            return ("取消折扣以提高年化估算", {"discountPercentage": 0})
+
+        # 杠杆4：提高舒适因子（上限 2.0）—— 差距大时直接拉满
+        current_factor = float(settings.get("scalingFactor") or 1.3)
+        if current_factor < 2.0:
+            next_factor = 2.0 if gap_ratio > 1.5 else min(current_factor * min(gap_ratio, 1.5), 2.0)
+            if next_factor > current_factor + 0.01:
+                return (f"提高舒适因子到 {next_factor:.2f}", {"scalingFactor": round(next_factor, 2)})
+
+        # 杠杆5：切换性能百分位到 99%（选择更大 VM 规格）
+        perf = settings.get("performanceData", {})
+        if perf.get("percentile") != "Percentile99":
+            return ("切换到 99 百分位性能数据（选择更大 VM）", {"performanceData": {**perf, "percentile": "Percentile99"}})
+
+        # 杠杆6：切换为按本地规格评估（使用实际硬件配置，通常选择更大 VM）
+        if settings.get("sizingCriterion") != "AsOnPremises":
+            return ("切换为按本地配置评估（不按性能缩放，通常得到更大 VM）", {"sizingCriterion": "AsOnPremises"})
+
+        # 杠杆7：仅保留 Premium 存储（费用更高）
+        disk_types = settings.get("azureDiskTypes", [])
+        if "StandardSSD" in disk_types and len(disk_types) > 1:
+            premium_only = [t for t in disk_types if t != "StandardSSD"]
+            return ("移除标准 SSD 存储选项，仅保留高级存储", {"azureDiskTypes": premium_only})
+
+        return ("已达到自动提价边界", {})
+
+    for round_index in range(1, 6):
+        round_name = f"round-{round_index}"
+        action, patch = _next_patch(annual_total)
+        if not patch:
+            progress(f"评估年化估算仍不在目标区间内，{action}。")
+            break
+        progress(f"评估年化估算不在目标区间，开始自动调整（{round_name}）：{action}")
+        settings.update(patch)
+        _put_assessment_v2_and_wait(
+            assessment_path, assessment_body, token,
+            subscription_id, resource_group, project_name, assessment_name,
+            progress,
+        )
+        monthly_total = _get_monthly_cost()
+        annual_total = monthly_total * 12
+        met = _in_target_range(annual_total)
+        progress(
+            f"{round_name} 重新计算完成：月估算 {_format_usd(monthly_total)}，"
+            f"年化 {_format_usd(annual_total)}，目标区间 {format_budget_target_range(range_info)}"
+        )
+        _record(round_name, action, monthly_total, met)
+        if met:
+            return monthly_total, history, True
+
+    progress(
+        f"已自动调整 {round_index} 轮，但 Azure Migrate 年化估算仍未落入用户预估年消耗的档次区间"
+        f"（{format_budget_target_range(range_info)}）；"
+        "请到 Azure Portal 的评估设置中手动调整后重新导出。"
+    )
+    return monthly_total, history, False
+
+
 def _put_assessment_and_wait(
     assessment_path: str,
     assessment_body: Dict[str, Any],
@@ -727,19 +1175,16 @@ def tune_assessment_to_budget(
     progress: Callable[[str], None],
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]], bool]:
     history: List[Dict[str, Any]] = []
-    target_min = annual_budget if annual_budget and annual_budget > 0 else None
-    # 目标上限为当前档次的天花板（不超过下一个 tier），而非固定 120%
-    if annual_budget and annual_budget > 0:
-        current_tier = snap_budget_to_tier(annual_budget)
-        tier_idx = BUDGET_TIERS.index(current_tier) if current_tier in BUDGET_TIERS else -1
-        if tier_idx < len(BUDGET_TIERS) - 1:
-            target_max = float(BUDGET_TIERS[tier_idx + 1])
-        else:
-            target_max = annual_budget * 1.2  # 所有档位统一上限 120%
-        target_mid = (target_min + target_max) / 2
-    else:
-        target_max = None
-        target_mid = None
+    range_info = budget_target_range(annual_budget)
+    target_min = range_info["target_min"]
+    target_max = range_info["target_max"]
+    target_mid = range_info["target_mid"]
+    target_max_exclusive = bool(range_info["target_max_exclusive"])
+
+    def _above_target(annual_total: float) -> bool:
+        if target_max is None:
+            return False
+        return annual_total >= target_max if target_max_exclusive else annual_total > target_max
 
     def _record(round_name: str, action: str, current: Dict[str, Any], met: bool) -> None:
         monthly_total = assessment_monthly_total_cost(current)
@@ -760,11 +1205,12 @@ def tune_assessment_to_budget(
         if target_min is None or target_max is None:
             return True
         annual_total = assessment_monthly_total_cost(current) * 12
-        return target_min <= annual_total <= target_max
+        below_upper = annual_total < target_max if target_max_exclusive else annual_total <= target_max
+        return target_min <= annual_total and below_upper
 
     def _next_patch(annual_total: float) -> tuple[str, Dict[str, Any]]:
         settings = assessment_body["properties"]
-        if target_max is not None and target_mid is not None and annual_total > target_max:
+        if target_max is not None and target_mid is not None and _above_target(annual_total):
             current_discount = float(settings.get("discountPercentage") or 0)
             current_discount_factor = max(1 - current_discount / 100, 0.01)
             undiscounted_annual = annual_total / current_discount_factor
@@ -772,18 +1218,18 @@ def tune_assessment_to_budget(
             next_discount = min(max(current_discount, required_discount), 99.0)
             if next_discount > current_discount + 0.1:
                 return (
-                    f"设置折扣为 {next_discount:.2f}%，控制年化估算不超过预估值 20%",
+                    f"设置折扣为 {next_discount:.2f}%，控制年化估算落入目标区间",
                     {"discountPercentage": round(next_discount, 2)},
                 )
             current_factor = float(settings.get("scalingFactor") or 1.3)
             if current_factor > 1.0:
                 next_factor = max(1.0, current_factor * 0.8)
                 return (
-                    f"降低舒适因子到 {next_factor:.2f}，控制年化估算不超过预估值 20%",
+                    f"降低舒适因子到 {next_factor:.2f}，控制年化估算落入目标区间",
                     {"scalingFactor": round(next_factor, 2)},
                 )
             if settings.get("azureSecurityOfferingType") != "NO":
-                return ("关闭安全成本估算，控制年化估算不超过预估值 20%", {"azureSecurityOfferingType": "NO"})
+                return ("关闭安全成本估算，控制年化估算落入目标区间", {"azureSecurityOfferingType": "NO"})
             return ("已达到自动降价边界", {})
 
         if target_mid is None:
@@ -819,12 +1265,12 @@ def tune_assessment_to_budget(
     annual_total = monthly_total * 12
     progress(
         "Azure Migrate 当前年化估算："
-        f"{_format_usd(annual_total)}；目标区间：{_format_usd(target_min)} - {_format_usd(target_max)}"
+        f"{_format_usd(annual_total)}；目标区间：{format_budget_target_range(range_info)}"
     )
     if _in_target_range(assessment):
         _record("initial", "初始 Portal 默认评估已在目标区间内", assessment, True)
         return assessment, history, True
-    direction = "高于" if target_max is not None and annual_total > target_max else "低于"
+    direction = "高于" if _above_target(annual_total) else "低于"
     _record("initial", f"初始 Portal 默认评估{direction}目标区间", assessment, False)
 
     current_props = assessment_body["properties"]
@@ -846,7 +1292,7 @@ def tune_assessment_to_budget(
         test_annual = test_monthly * 12
         if target_min and test_annual < target_min:
             continue
-        if target_max and test_annual > target_max:
+        if _above_target(test_annual):
             continue
         assessment_body = test_body
         assessment = test_result
@@ -874,7 +1320,7 @@ def tune_assessment_to_budget(
         met = _in_target_range(assessment)
         progress(
             f"{round_name} 重新计算完成：月估算 {_format_usd(monthly_total)}，"
-            f"年化 {_format_usd(annual_total)}，目标区间 {_format_usd(target_min)} - {_format_usd(target_max)}"
+            f"年化 {_format_usd(annual_total)}，目标区间 {format_budget_target_range(range_info)}"
         )
         _record(round_name, action, assessment, met)
         if met:
@@ -882,7 +1328,7 @@ def tune_assessment_to_budget(
 
     progress(
         f"已自动调整 3 轮，但 Azure Migrate 年化估算仍未落入用户预估年消耗的档次区间"
-        f"（{_format_usd(target_min)} ~ {_format_usd(target_max)}）；"
+        f"（{format_budget_target_range(range_info)}）；"
         "请到 Azure Portal 的评估设置中手动调整后重新导出。"
     )
     return assessment, history, False
@@ -986,24 +1432,32 @@ def run_azure_migrate_assessment(
     csv_text_raw = load_builtin_csv_template()
     safe_prefix = _safe_csv_prefix(account_name)
     csv_text = prefix_csv_server_names(csv_text_raw, safe_prefix)
+    csv_text = ensure_csv_disk_columns(csv_text)
+    csv_text = jitter_csv_performance(csv_text, account_name)
     csv_bytes = csv_text.encode("utf-8-sig")
     progress(f"  ✅ 已为所有服务器名添加前缀: {safe_prefix}-")
+    progress("  ✅ 已补齐服务器磁盘字段，确保 Azure Migrate 生成磁盘评估")
+    progress("  ✅ 已应用客户专属性能参数微调")
 
     annual_budget = parse_annual_budget_usd(annual_budget_text)
-    tier = snap_budget_to_tier(annual_budget) if annual_budget and annual_budget > 0 else BUDGET_TIERS[-1]
-    progress(f"客户预估年消耗: {_format_usd(annual_budget)}，匹配规模档位: {_format_usd(float(tier))}")
+    budget_range = budget_target_range(annual_budget)
+    tier = int(budget_range["tier"])
+    progress(
+        f"客户预估年消耗: {_format_usd(annual_budget)}，"
+        f"匹配规模档位: {_format_usd(float(tier))}，"
+        f"目标区间: {format_budget_target_range(budget_range)}"
+    )
 
     safe_base = _safe_azure_name(account_name, f"poe-{_date_prefix()}", max_len=36).lower()
     run_suffix = str(int(time.time()))
     short_run_suffix = run_suffix[-6:]
     project_name = _safe_azure_name(safe_base, "poe", "project", 55)
-    site_name = _safe_azure_name(safe_base, "poe", "site", 24)
+    site_name = _safe_azure_name(safe_base, "poe", f"site{short_run_suffix}", 24)
     master_site_name = _safe_azure_name(safe_base, "poe", "masterSite", 55)
-    collector_name = _safe_azure_name(safe_base, "poe", "collector", 55)
+    collector_name = _safe_azure_name(safe_base, "poe", f"collector-{short_run_suffix}", 55)
     group_name = _safe_azure_name(safe_base, "poe", f"group-{run_suffix}", 55)
     assessment_resource_name = _safe_azure_name(assessment_name, "poe-assessment", max_len=55)
     project_location = resolve_migrate_project_location(subscription_id, resource_group, token)
-    annual_budget = parse_annual_budget_usd(annual_budget_text)
     migrate_project_id = _resource_id(
         subscription_id,
         resource_group,
@@ -1164,6 +1618,19 @@ def run_azure_migrate_assessment(
     existing_sites = []
     if existing_master_site:
         existing_sites = existing_master_site.get("properties", {}).get("sites") or []
+        # 等待 masterSite provisioningState 变为 terminal 状态后再修改
+        prov_state = existing_master_site.get("properties", {}).get("provisioningState", "")
+        if prov_state and prov_state not in ("Succeeded", "Failed", "Canceled", ""):
+            progress(f"  ⏳ Master Site 正在操作中（{prov_state}），等待完成...")
+            for _ in range(40):  # 最多等 ~200 秒
+                time.sleep(5)
+                check = _try_get_existing_resource(master_site_path, token)
+                if not check:
+                    break
+                prov_state = check.get("properties", {}).get("provisioningState", "Succeeded")
+                if prov_state in ("Succeeded", "Failed", "Canceled", ""):
+                    break
+            progress(f"  ✅ Master Site 已就绪（{prov_state}）")
     master_site_result = azure_arm_request("PUT", master_site_path, token, {
         "kind": "Migrate",
         "location": project_location,
@@ -1420,81 +1887,43 @@ def run_azure_migrate_assessment(
             f"预期年化 {_format_usd(tier_info['expected_annual'])}"
         )
 
-    selected_ids = get_machine_ids_for_tier(tier, machines, safe_prefix, cache)
+    selected_ids = get_machine_ids_for_tier(tier, machines, safe_prefix, cache, customer_name=account_name)
     if not selected_ids:
         selected_ids = all_machine_ids
     progress(f"当前规模选定 {len(selected_ids)}/{len(all_machine_ids)} 台服务器进入最终评估")
 
-    # ── Step 13: 创建最终评估组并通过 updateMachines 加入选定服务器 ──
-    progress("创建最终评估组...")
-    group_path = (
-        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
-        f"/groups/{group_name}?api-version={AZURE_MIGRATE_API_VERSION}"
-    )
-    existing_group = _try_get_existing_resource(group_path, token)
-    if existing_group:
-        existing_group_type = str(existing_group.get("properties", {}).get("groupType", "")).strip().lower()
-        if existing_group_type and existing_group_type != "import":
-            # 同名组如果不是 Import 类型，groupType 无法修改，只能改名新建。
-            group_name = _safe_azure_name(group_name, "poe-group", f"-imp-{int(time.time())}", 55)
-            group_path = (
-                f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-                f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
-                f"/groups/{group_name}?api-version={AZURE_MIGRATE_API_VERSION}"
-            )
-            existing_group = None
-            progress(f"  ⚠️ 发现同名评估组类型为 {existing_group_type}，改用新组名: {group_name}")
+    # V2 ARG 查询需要 OffAzure discoveryMachineArmId，不是 assessment project machine ID
+    id_to_discovery = {}
+    for m in machines:
+        mid = m.get("id", "")
+        discovery = m.get("properties", {}).get("discoveryMachineArmId", "")
+        if mid and discovery:
+            id_to_discovery[mid.lower()] = discovery
+    selected_discovery_ids = [
+        id_to_discovery.get(sid.lower(), sid) for sid in selected_ids
+    ]
 
-    if not existing_group:
-        azure_arm_request("PUT", group_path, token, {
-            "properties": {"groupType": "Import"},
-            "eTag": "",
-        })
-        progress(f"  ✅ 已创建 Import 评估组: {group_name}")
-    else:
-        progress(f"  ✅ 复用评估组: {group_name}")
-
-    update_machines_path = (
-        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
-        f"/groups/{group_name}/updateMachines?api-version={AZURE_MIGRATE_API_VERSION}"
-    )
-    azure_arm_request("POST", update_machines_path, token, {
-        "eTag": "*",
-        "properties": {
-            "operationType": "Add",
-            "machines": selected_ids,
-        },
-    })
-    progress(f"  ✅ 已向评估组添加服务器: {len(selected_ids)} 台")
-
-    group_payload = wait_for_group_machine_membership(
-        group_path,
-        token,
-        expected_machine_count=len(selected_ids),
-        progress=progress,
-    )
-    supported_types = {
-        str(item).strip()
-        for item in (group_payload.get("properties", {}).get("supportedAssessmentTypes") or [])
-        if str(item).strip()
-    }
-    if supported_types and "MachineAssessment" not in supported_types:
-        progress(
-            "  ℹ️ 评估组尚未显式返回 MachineAssessment；"
-            "继续按服务器评估类型创建 Azure VM 评估。"
-        )
-
-    # ── Step 14: 创建最终评估 ──
-    progress("创建 Azure Migrate 最终评估...")
+    # ── Step 13: 创建新版 Azure VM 评估（project-level，无需 group） ──
+    progress("创建 Azure Migrate 最终评估（新版 Azure VM 类型）...")
     assessment_path = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
-        f"/groups/{group_name}/assessments/{assessment_resource_name}"
-        f"?api-version={AZURE_MIGRATE_API_VERSION}"
+        f"/providers/Microsoft.Migrate/assessmentprojects/{project_name}"
+        f"/assessments/{assessment_resource_name}"
+        f"?api-version={AZURE_MIGRATE_V2_API_VERSION}"
     )
-    assessment_body = _build_assessment_body(target_location=target_location)
+    assessment_body = _build_assessment_body_v2(
+        import_site_id=import_site_id,
+        machine_ids=selected_discovery_ids,
+        target_location=target_location,
+        customer_name=account_name,
+    )
+    settings = assessment_body.get("properties", {}).get("settings", {})
+    progress(
+        "  ✅ 已应用客户专属评估参数："
+        f"舒适因子 {settings.get('scalingFactor')}，"
+        f"折扣 {settings.get('discountPercentage')}%"
+    )
+
     if target_location:
         progress(f"  ℹ️ 评估目标区域已设为：{target_location}（与解决方案架构一致）")
     if annual_budget is not None:
@@ -1502,21 +1931,22 @@ def run_azure_migrate_assessment(
     else:
         progress("未解析到有效预估年消耗；评估会按 Portal 默认设置创建。")
     azure_arm_request("PUT", assessment_path, token, assessment_body)
-    assessment = wait_for_assessment_complete(
-        subscription_id, resource_group, project_name, group_name, assessment_resource_name, token, progress
+    assessment = wait_for_assessment_complete_v2(
+        subscription_id, resource_group, project_name, assessment_resource_name, token, progress
     )
-    assessment, tuning_history, budget_target_met = tune_assessment_to_budget(
+
+    # ── Step 14: 预算调优 ──
+    monthly_cost, tuning_history, budget_target_met = tune_assessment_to_budget_v2(
         subscription_id=subscription_id,
         resource_group=resource_group,
         project_name=project_name,
-        group_name=group_name,
         assessment_name=assessment_resource_name,
         assessment_path=assessment_path,
         assessment_body=assessment_body,
-        assessment=assessment,
         annual_budget=annual_budget,
         token=token,
         progress=progress,
+        customer_name=account_name,
     )
     try:
         refresh_migrate_project_summary(subscription_id, resource_group, project_name, token)
@@ -1526,13 +1956,13 @@ def run_azure_migrate_assessment(
     progress("读取评估结果并下载 Azure Migrate Portal 同源 Excel 报告...")
     assessed_machines = azure_arm_list(
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.Migrate/assessmentProjects/{project_name}"
-        f"/groups/{group_name}/assessments/{assessment_resource_name}/assessedMachines"
-        f"?api-version={AZURE_MIGRATE_API_VERSION}",
+        f"/providers/Microsoft.Migrate/assessmentprojects/{project_name}"
+        f"/assessments/{assessment_resource_name}/assessedMachines"
+        f"?api-version={AZURE_MIGRATE_V2_API_VERSION}",
         token,
     )
-    excel_bytes = download_assessment_report(
-        subscription_id, resource_group, project_name, group_name, assessment_resource_name, token
+    excel_bytes = download_assessment_report_v2(
+        subscription_id, resource_group, project_name, assessment_resource_name, token
     )
     progress(f"  ✅ Azure Migrate 导出报告已下载（{len(excel_bytes)} 字节）")
     return {
@@ -1549,8 +1979,12 @@ def run_azure_migrate_assessment(
         "assessed_machines": assessed_machines,
         "excel_bytes": excel_bytes,
         "budget_target": annual_budget,
-        "monthly_cost": assessment_monthly_total_cost(assessment),
-        "annualized_cost": assessment_monthly_total_cost(assessment) * 12,
+        "budget_target_min": budget_range.get("target_min"),
+        "budget_target_max": budget_range.get("target_max"),
+        "budget_target_max_exclusive": budget_range.get("target_max_exclusive"),
+        "budget_target_range_label": format_budget_target_range(budget_range),
+        "monthly_cost": monthly_cost,
+        "annualized_cost": monthly_cost * 12,
         "budget_target_met": budget_target_met,
         "tuning_history": tuning_history,
         "tier": tier,
@@ -1587,6 +2021,14 @@ def fix_assessment_excel_timestamps(
     def _parse_time_from_value(orig):
         if isinstance(orig, datetime.datetime):
             return orig.hour, orig.minute, orig.second
+        # Excel serial number (float/int) — fractional part encodes time-of-day
+        if isinstance(orig, (int, float)):
+            frac = orig % 1
+            total_seconds = round(frac * 86400)
+            h = total_seconds // 3600
+            mi = (total_seconds % 3600) // 60
+            s = total_seconds % 60
+            return h, mi, s
         text = str(orig).strip()
         m = re.search(r"(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?", text, re.IGNORECASE)
         if m:
@@ -1603,50 +2045,94 @@ def fix_assessment_excel_timestamps(
 
     if "Assessment_Summary" in wb.sheetnames:
         ws = wb["Assessment_Summary"]
-        created_col = None
-        for col in range(1, ws.max_column + 1):
-            cell_val = ws.cell(row=1, column=col).value
+        # Assessment_Summary 是 key-value 布局（A列=属性名, B列=值）
+        for row in range(1, ws.max_row + 1):
+            cell_val = ws.cell(row=row, column=1).value
             if cell_val and "created on" in str(cell_val).lower():
-                created_col = col
-                break
-        if created_col:
-            for row in range(2, ws.max_row + 1):
-                orig = ws.cell(row=row, column=created_col).value
+                val_col = 2
+                orig = ws.cell(row=row, column=val_col).value
                 if orig is not None:
                     h, mi, s = _parse_time_from_value(orig)
                     created_datetime = datetime.datetime(
                         created_date.year, created_date.month, created_date.day, h, mi, s
                     )
-                    ws.cell(row=row, column=created_col).value = _format_as_text(created_datetime)
+                    ws.cell(row=row, column=val_col).value = _format_as_text(created_datetime)
+                break
 
     if created_datetime is None:
+        now_utc = datetime.datetime.utcnow()
         created_datetime = datetime.datetime(
-            created_date.year, created_date.month, created_date.day, 2, 35, 35
+            created_date.year, created_date.month, created_date.day,
+            now_utc.hour, now_utc.minute, now_utc.second,
         )
 
     if "Assessment_Properties" in wb.sheetnames:
         ws = wb["Assessment_Properties"]
-        # end datetime = Created on (UTC) 完整 datetime
-        perf_end_datetime = created_datetime
-        # start datetime = end datetime - 1 天
-        perf_start_datetime = created_datetime - datetime.timedelta(days=1)
+        # 只修改日期部分，保留原始时分秒
+        perf_end_date = created_datetime.date()
+        perf_start_date = perf_end_date - datetime.timedelta(days=1)
         # 边界保护：start 不能早于 POV 开始
-        pov_start_datetime = datetime.datetime(
-            pov_start.year, pov_start.month, pov_start.day, 0, 0, 0
-        )
-        if perf_start_datetime < pov_start_datetime:
-            perf_start_datetime = pov_start_datetime
-            perf_end_datetime = pov_start_datetime + datetime.timedelta(days=1)
+        if perf_start_date < pov_start:
+            perf_start_date = pov_start
+            perf_end_date = pov_start + datetime.timedelta(days=1)
+
+        # 先收集 perf end 原始时间，确保 Created 时间 > Perf end 时间
+        perf_end_time = None
+        for row in range(2, ws.max_row + 1):
+            for col in range(1, ws.max_column + 1):
+                prop_name = str(ws.cell(row=row, column=col).value or "").lower()
+                if "performance history end" in prop_name:
+                    orig = ws.cell(row=row, column=col + 1).value
+                    h, mi, s = _parse_time_from_value(orig)
+                    perf_end_time = (h, mi, s)
+                    break
+            if perf_end_time:
+                break
+
+        # 确保 created_datetime 的时间晚于 perf_end 时间（Portal 自然行为）
+        if perf_end_time:
+            pe_h, pe_mi, pe_s = perf_end_time
+            cr_seconds = created_datetime.hour * 3600 + created_datetime.minute * 60 + created_datetime.second
+            pe_seconds = pe_h * 3600 + pe_mi * 60 + pe_s
+            if cr_seconds <= pe_seconds:
+                # Created 应比 perf_end 晚 30-60 秒
+                new_cr_seconds = pe_seconds + 34
+                if new_cr_seconds >= 86400:
+                    new_cr_seconds = 86400 - 1
+                new_h = new_cr_seconds // 3600
+                new_mi = (new_cr_seconds % 3600) // 60
+                new_s = new_cr_seconds % 60
+                created_datetime = datetime.datetime(
+                    created_datetime.year, created_datetime.month, created_datetime.day,
+                    new_h, new_mi, new_s
+                )
+                # 同步更新 Assessment_Summary 中的 Created on
+                if "Assessment_Summary" in wb.sheetnames:
+                    ws_sum = wb["Assessment_Summary"]
+                    for r in range(1, ws_sum.max_row + 1):
+                        cv = ws_sum.cell(row=r, column=1).value
+                        if cv and "created on" in str(cv).lower():
+                            ws_sum.cell(row=r, column=2).value = _format_as_text(created_datetime)
+                            break
 
         for row in range(2, ws.max_row + 1):
             for col in range(1, ws.max_column + 1):
                 prop_name = str(ws.cell(row=row, column=col).value or "").lower()
                 if "performance history start" in prop_name:
                     val_col = col + 1
-                    ws.cell(row=row, column=val_col).value = _format_as_text(perf_start_datetime)
+                    orig = ws.cell(row=row, column=val_col).value
+                    h, mi, s = _parse_time_from_value(orig)
+                    new_dt = datetime.datetime(perf_start_date.year, perf_start_date.month, perf_start_date.day, h, mi, s)
+                    ws.cell(row=row, column=val_col).value = _format_as_text(new_dt)
                 elif "performance history end" in prop_name:
                     val_col = col + 1
-                    ws.cell(row=row, column=val_col).value = _format_as_text(perf_end_datetime)
+                    orig = ws.cell(row=row, column=val_col).value
+                    h, mi, s = _parse_time_from_value(orig)
+                    new_dt = datetime.datetime(perf_end_date.year, perf_end_date.month, perf_end_date.day, h, mi, s)
+                    ws.cell(row=row, column=val_col).value = _format_as_text(new_dt)
+                elif "created on" in prop_name:
+                    val_col = col + 1
+                    ws.cell(row=row, column=val_col).value = _format_as_text(created_datetime)
 
     out_buf = io.BytesIO()
     wb.save(out_buf)

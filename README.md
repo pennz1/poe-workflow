@@ -38,18 +38,41 @@
 ### 1. 安装依赖
 
 ```bash
+cd "/Users/penn/Documents/POE workflow"
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ### 2. 配置密钥（见下一节）
 
-### 3. 启动应用
+### 3. 启动应用（本地开发）
+
+> **重要：** 必须从项目根目录 `/Users/penn/Documents/POE workflow` 启动，否则无法读取 `.streamlit/secrets.toml`。
 
 ```bash
-streamlit run app.py
+cd "/Users/penn/Documents/POE workflow"
+.venv/bin/streamlit run poeworkflow-refactor/main.py --server.port 8501
 ```
 
 浏览器会自动打开 `http://localhost:8501`。
+
+### 4. 部署到 Azure
+
+使用部署脚本（位于 `~/Development/poe-workflow/deploy.sh`）：
+
+```bash
+# 快速部署 — 仅代码变更，不触发 pip install (~10秒)
+./deploy.sh fast
+
+# 完整部署 — requirements.txt 变更时使用 (~90秒)
+./deploy.sh full
+
+# 单文件热修复 (~5秒)
+./deploy.sh file poeworkflow-refactor/pipeline.py
+```
+
+详细部署说明见 [docs/azure-deployment.md](docs/azure-deployment.md)。
 
 ---
 
@@ -217,6 +240,7 @@ A: 文件名格式为 `MMDD-客户名称-文档类型.扩展名`，例如：`022
 | `python-docx` | ≥ 1.1.0 | Word 文档生成 |
 | `openpyxl` | ≥ 3.1.0 | 读取 Excel 价格估算表 |
 | `pandas` | ≥ 2.0.0 | CSV 预览表格渲染 |
+| `playwright` | ≥ 1.45.0 | 自动打开 Azure Pricing Calculator 并从网站 Export 价格表 |
 
 ---
 

@@ -32,23 +32,48 @@ def date_prefix():
 def _extract_resource_section(content: str) -> str:
     """从解决方案文档中提取第八章资源需求表。"""
     lines = content.split("\n")
-    start = None
+    table_header_tokens = ["服务名称", "配置规格", "区域", "核心用途"]
+
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("## 八、") or stripped.startswith("## 8.") or stripped == "## 八、资源架构":
-            start = i
+        if stripped.startswith("|") and all(token in stripped for token in table_header_tokens):
+            table_lines = [stripped]
+            for next_line in lines[i + 1:]:
+                next_stripped = next_line.strip()
+                if not next_stripped.startswith("|"):
+                    break
+                table_lines.append(next_stripped)
+            return "\n".join(table_lines).strip()
+
+    section_start = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        heading_text = stripped.lstrip("#").strip()
+        is_heading = stripped.startswith("##")
+        is_resource_heading = "资源" in heading_text and (
+            "需求" in heading_text or "架构" in heading_text or heading_text.startswith(("八", "8"))
+        )
+        if is_heading and is_resource_heading:
+            section_start = i
             break
-    if start is None:
+
+    if section_start is None:
         return ""
-    # 从标题行开始收集，直到遇到下一个 ## 标题或结束
+
     section_lines = []
-    for i in range(start, len(lines)):
+    for i in range(section_start, len(lines)):
         line = lines[i]
         stripped = line.strip()
-        if i > start and (stripped.startswith("## ") or stripped.startswith("# ")):
+        if i > section_start and (stripped.startswith("## ") or stripped.startswith("# ")):
             break
         section_lines.append(line)
     return "\n".join(section_lines).strip()
+
+
+def _is_markdown_table(text: str) -> bool:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    table_lines = [line for line in lines if line.startswith("|") and line.count("|") >= 2]
+    return len(table_lines) >= 2
 
 
 def generate_solution_artifact(
@@ -175,6 +200,8 @@ def format_auto_poe_log(message: str) -> str:
     text = str(message or "").strip()
     if not text:
         return ""
+    if _is_markdown_table(text):
+        return text
     # 保留 Markdown 格式行（标题、颜色标注等）原样输出
     if text.startswith("**") or text.startswith("---") or ":green[" in text or ":red[" in text or ":orange[" in text:
         return text
@@ -192,6 +219,8 @@ def should_display_auto_poe_log(message: str) -> bool:
     text = str(message or "").strip()
     if not text:
         return False
+    if _is_markdown_table(text):
+        return True
     # Markdown 格式行（分模块标题、带颜色的结果行）始终显示
     if text.startswith("**") or text.startswith("---") or ":green[" in text or ":red[" in text or ":orange[" in text:
         return True
@@ -249,7 +278,8 @@ def run_full_auto_poe(
     progress: Callable[[str], None],
 ) -> Dict[str, Any]:
     progress("---")
-    progress("**一、AI 解决方案架构文档**")
+    doc_label = "AI 解决方案架构文档" if current_doc_type == "AI" else "基础设施解决方案架构文档"
+    progress(f"**一、{doc_label}**")
     if existing_solution_text and existing_solution_text.strip():
         solution_artifact = create_solution_artifact_from_text(
             current_doc_type,
@@ -272,8 +302,6 @@ def run_full_auto_poe(
 
     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
     st.session_state[target_key] = solution_artifact["content"]
-    st.session_state["customer_name"] = customer_name
-    st.session_state["account_name"] = account_name
 
     # 打印第八章资源需求表，方便用户提前查看资源清单
     if current_doc_type == "AI":
@@ -282,8 +310,7 @@ def run_full_auto_poe(
             progress("---")
             progress("**📋 资源需求清单（第八章）**")
             progress("")
-            for line in resource_section.split("\n"):
-                progress(line)
+            progress(resource_section)
             progress("")
             progress("**以上为方案文档中的资源需求，可据此在 Azure Pricing Calculator 手动制作价格表。**")
             progress("---")
@@ -341,10 +368,11 @@ def run_full_auto_poe(
     # 打包所有交付物
     all_artifacts = [solution_artifact, pov_artifact, assessment_artifact]
     zip_bytes = create_poe_zip(all_artifacts)
-    progress(f"成功生成 POE 套件：{account_name}-POE-Complete.zip（{len(all_artifacts)} 个文件）")
+    zip_name = f"{account_name}-POE-{current_doc_type}.zip"
+    progress(f"成功生成 POE 套件：{zip_name}（{len(all_artifacts)} 个文件）")
     return {
         "zip_bytes": zip_bytes,
-        "zip_name": f"{account_name}-POE-Complete.zip",
+        "zip_name": zip_name,
         "solution": solution_artifact,
         "pov": pov_artifact,
         "assessment": assessment_artifact,

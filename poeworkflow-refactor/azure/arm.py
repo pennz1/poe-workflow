@@ -95,16 +95,21 @@ def azure_arm_request(
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, json=body, timeout=timeout)
-            break
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             last_exc = exc
             if attempt < max_retries - 1:
                 time.sleep(5 * (attempt + 1))
-            else:
-                raise RuntimeError(
-                    f"HTTPSConnectionPool(host='management.azure.com', port=443): "
-                    f"Max retries exceeded with url: {path_or_url.split('?')[0]} — {exc}"
-                ) from exc
+                continue
+            raise RuntimeError(
+                f"HTTPSConnectionPool(host='management.azure.com', port=443): "
+                f"Max retries exceeded with url: {path_or_url.split('?')[0]} — {exc}"
+            ) from exc
+        # 对可重试的服务端/限流错误自动重试
+        if response.status_code in {429, 500, 502, 503, 504} and attempt < max_retries - 1:
+            delay = _retry_after_seconds(response, default=10 * (attempt + 1))
+            time.sleep(delay)
+            continue
+        break
     if response.status_code >= 400:
         raise RuntimeError(_format_arm_error(response))
     payload: Dict[str, Any] = {}

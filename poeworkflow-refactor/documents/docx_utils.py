@@ -73,8 +73,8 @@ def parse_markdown_table(lines: List[str]) -> Optional[List[List[str]]]:
         # 跳过分隔行 |---|---|
         if re.match(r"^\|[\s\-:|]+\|$", stripped):
             continue
-        # 解析单元格
-        cells = [c.strip() for c in stripped.split("|")]
+        # 解析单元格，并将单元格内的 <br> 转为换行符
+        cells = [re.sub(r"<br\s*/?>", "\n", c.strip(), flags=re.IGNORECASE) for c in stripped.split("|")]
         # 去掉首尾空元素（因为 | 在开头和结尾会产生空字符串）
         if cells and cells[0] == "":
             cells = cells[1:]
@@ -86,7 +86,7 @@ def parse_markdown_table(lines: List[str]) -> Optional[List[List[str]]]:
 
 
 def add_word_table(doc, table_data: list[list[str]]):
-    """将二维数组写入 Word 表格，应用专业样式。"""
+    """将二维数组写入 Word 表格，应用专业样式。支持单元格内换行(\n)。"""
     if not table_data:
         return
 
@@ -100,15 +100,21 @@ def add_word_table(doc, table_data: list[list[str]]):
                 break
             cell = table.cell(ri, ci)
             cell.text = ""  # 清空默认段落文本
-            p = cell.paragraphs[0]
-            run = p.add_run(cell_text)
             is_header = (ri == 0)
-            set_run_font(
-                run,
-                font_name=CN_FONT,
-                size_pt=9,
-                bold=is_header,
-            )
+            # 支持单元格内多行内容
+            text_parts = cell_text.split("\n") if "\n" in cell_text else [cell_text]
+            for pi, part in enumerate(text_parts):
+                if pi == 0:
+                    p = cell.paragraphs[0]
+                else:
+                    p = cell.add_paragraph()
+                run = p.add_run(part)
+                set_run_font(
+                    run,
+                    font_name=CN_FONT,
+                    size_pt=9,
+                    bold=is_header,
+                )
             # 表头行背景色
             if is_header:
                 shading = cell._element.get_or_add_tcPr()
@@ -117,7 +123,10 @@ def add_word_table(doc, table_data: list[list[str]]):
                     {qn("w:fill"): "156082", qn("w:val"): "clear"},
                 )
                 shading.append(shading_elem)
-                run.font.color.rgb = RGBColor(255, 255, 255)
+                # 给所有 run 设置白色字体
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.font.color.rgb = RGBColor(255, 255, 255)
 
 
 def markdown_to_docx(doc, markdown_text: str, body_size=9):
@@ -125,9 +134,22 @@ def markdown_to_docx(doc, markdown_text: str, body_size=9):
     将 AI 返回的 Markdown 文本解析并写入 Word 文档。
     支持: 标题 (#/##/###)、列表 (-/*)、Markdown 表格、加粗 (**)、普通段落。
     """
-    # 预处理：将 <br> 变体转换为换行符
-    markdown_text = re.sub(r"<br\s*/?>", "\n", markdown_text)
+    # 预处理：将 <br> 变体转换为换行符，但保留表格行内的 <br>（后续在单元格内处理）
     lines = markdown_text.split("\n")
+    expanded_lines = []
+    for raw_line in lines:
+        if "<br" in raw_line.lower():
+            # 判断是否为表格行（以 | 开头）
+            if raw_line.strip().startswith("|"):
+                # 表格行：保留 <br> 不拆行，后续在 parse_markdown_table 中处理
+                expanded_lines.append(raw_line)
+            else:
+                # 非表格行：将 <br> 拆为多行
+                parts = re.split(r"<br\s*/?>", raw_line, flags=re.IGNORECASE)
+                expanded_lines.extend(parts)
+        else:
+            expanded_lines.append(raw_line)
+    lines = expanded_lines
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -218,6 +240,10 @@ def load_template(template_path: str) -> Document:
         # 清空表格
         for t in doc.tables:
             t._element.getparent().remove(t._element)
+        # 清空结构化文档标签（如模板中残留的 TOC 目录域）
+        body = doc.element.body
+        for sdt in body.findall(qn("w:sdt")):
+            body.remove(sdt)
         return doc
     else:
         return Document()

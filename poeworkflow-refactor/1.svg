@@ -1,0 +1,248 @@
+<svg width="1400" height="950" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <!-- 1. 核心视觉定义 (柔和阴影、现代化渐变) -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4"/>
+      <feOffset dx="2" dy="4" result="offsetblur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.15"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#F5F8FA;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FFFFFF;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- 区域层渐变色 -->
+    <linearGradient id="layerChannel" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#F0F6FF;stop-opacity:0.8" />
+    </linearGradient>
+    <linearGradient id="layerGateway" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F0F8FF;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#DDF0FF;stop-opacity:0.8" />
+    </linearGradient>
+    <linearGradient id="layerCompute" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#F3E8FF;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="layerData" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#E6F4F1;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="layerSec" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFF5F5;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#FFEBEE;stop-opacity:0.9" />
+    </linearGradient>
+
+    <!-- 连线箭头 (正交路由专用) -->
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#0078D4" />
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#5C2D91" />
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#008272" />
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#D13438" />
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#E65100" />
+    </marker>
+  </defs>
+
+  <!-- 第 1 层：全局背景 -->
+  <rect width="100%" height="100%" fill="url(#bgGradient)" />
+  <text x="700" y="45" font-family="'Segoe UI', sans-serif" font-size="28" font-weight="bold" fill="#111" text-anchor="middle">佛山蓝鼠智能科技 - 多校区教学运营云基础底座架构图</text>
+  <line x1="380" y1="65" x2="1020" y2="65" stroke="#0078D4" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 第 2 层：逻辑区域大框 (Zoning) -->
+  
+  <!-- 多校区与终端层 (左侧) -->
+  <rect x="40" y="100" width="260" height="660" rx="15" fill="url(#layerChannel)" stroke="#B3D6FC" stroke-width="2" stroke-dasharray="6,6" />
+  <text x="170" y="135" font-family="'Segoe UI', sans-serif" font-size="16" fill="#005A9E" font-weight="bold" text-anchor="middle">多校区安全接入终端层</text>
+
+  <!-- 统一网关与边界层 (中左) -->
+  <rect x="320" y="100" width="240" height="660" rx="15" fill="url(#layerGateway)" stroke="#99C9FF" stroke-width="2" />
+  <text x="440" y="135" font-family="'Segoe UI', sans-serif" font-size="16" fill="#0078D4" font-weight="bold" text-anchor="middle">统一访问入口与网络边界</text>
+
+  <!-- 教学运营云中枢 (中右) -->
+  <rect x="580" y="100" width="410" height="660" rx="15" fill="url(#layerCompute)" stroke="#D8B4FE" stroke-width="2" />
+  <text x="785" y="135" font-family="'Segoe UI', sans-serif" font-size="16" fill="#5C2D91" font-weight="bold" text-anchor="middle">教学运营云中枢 (Southeast Asia)</text>
+
+  <!-- 数据分层治理底座 (最右) -->
+  <rect x="1010" y="100" width="350" height="660" rx="15" fill="url(#layerData)" stroke="#A2E9DF" stroke-width="2" />
+  <text x="1185" y="135" font-family="'Segoe UI', sans-serif" font-size="16" fill="#005E52" font-weight="bold" text-anchor="middle">教育数据分层治理底座</text>
+
+  <!-- 安全与治理管理底座 (底部) -->
+  <rect x="40" y="780" width="1320" height="130" rx="15" fill="url(#layerSec)" stroke="#E57373" stroke-width="2" />
+  <text x="700" y="815" font-family="'Segoe UI', sans-serif" font-size="16" fill="#C62828" font-weight="bold" text-anchor="middle">端到端安全控制、身份治理与持续监控审计底层架构</text>
+
+
+  <!-- 第 3 层：连线 (Connectors - 严格正交路由算法，彻底防穿模) -->
+  <g id="connectors">
+    <!-- 校区管理端 / 家长端 到 Front Door -->
+    <path d="M 260 190 L 300 190 L 300 240 L 340 240" fill="none" stroke="#0078D4" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+    
+    <!-- 教务远程支持 到 Virtual Desktop -->
+    <path d="M 260 300 L 300 300 L 300 370 L 340 370" fill="none" stroke="#0078D4" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+    
+    <!-- 线下教学点 到 VPN Gateway -->
+    <path d="M 260 550 L 300 550 L 300 550 L 340 550" fill="none" stroke="#0078D4" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+
+    <!-- Front Door 到 AKS (应用层) -->
+    <path d="M 500 240 L 540 240 L 540 240 L 600 240" fill="none" stroke="#5C2D91" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+
+    <!-- Virtual Desktop 到 AKS (内部受控访问) -->
+    <path d="M 500 370 L 540 370 L 540 320 L 600 320" fill="none" stroke="#5C2D91" stroke-width="2.5" stroke-dasharray="4,4" marker-end="url(#arrowPurple)"/>
+
+    <!-- VPN Gateway 到 Firewall (流量控制) -->
+    <path d="M 440 510 L 440 450 L 600 450" fill="none" stroke="#D13438" stroke-width="2" marker-end="url(#arrowRed)"/>
+
+    <!-- Firewall 到 AKS (受控的内部调用) -->
+    <path d="M 760 450 L 780 450 L 780 340 L 760 340" fill="none" stroke="#5C2D91" stroke-width="2" marker-end="url(#arrowPurple)"/>
+
+    <!-- AKS 到各类数据服务 (存储与缓存) -->
+    <!-- AKS to SQL DB -->
+    <path d="M 760 210 L 880 210 L 880 210 L 1050 210" fill="none" stroke="#008272" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+    <!-- AKS to Redis -->
+    <path d="M 760 250 L 850 250 L 850 360 L 1050 360" fill="none" stroke="#008272" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+    <!-- AKS to Blob -->
+    <path d="M 760 290 L 820 290 L 820 510 L 1050 510" fill="none" stroke="#008272" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+
+    <!-- 安全管控连线 (Dashed lines from bottom layer) -->
+    <!-- Entra ID 统一身份管控到各类接入与管理 -->
+    <path d="M 230 840 L 230 760 L 420 760 L 420 410" fill="none" stroke="#D13438" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowRed)"/>
+    
+    <!-- Private Endpoint 确保数据存储网络边界隔离 -->
+    <path d="M 520 840 L 520 760 L 1200 760 L 1200 560" fill="none" stroke="#D13438" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowRed)"/>
+    <path d="M 1200 760 L 1200 410" fill="none" stroke="#D13438" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowRed)"/>
+    <path d="M 1200 760 L 1200 260" fill="none" stroke="#D13438" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowRed)"/>
+
+    <!-- Defender & Monitor 到核心计算层 (监控审计) -->
+    <path d="M 820 840 L 820 760 L 680 760 L 680 370" fill="none" stroke="#E65100" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowOrange)"/>
+    <path d="M 1150 840 L 1150 760 L 980 760 L 980 360" fill="none" stroke="#E65100" stroke-width="1.5" stroke-dasharray="4,4"/>
+
+  </g>
+
+  <!-- 第 4 层：服务组件卡片 (带有不透明背景 fill="#FFF"，完美覆盖底层连线) -->
+  <g id="components">
+
+    <!-- ================= Zone 1: 多校区与终端层 ================= -->
+    <g transform="translate(60, 160)" filter="url(#shadow)">
+      <rect width="200" height="60" rx="8" fill="#FFF" stroke="#0078D4" stroke-width="1.5"/>
+      <text x="100" y="25" font-family="'Segoe UI', sans-serif" font-size="13" fill="#333" font-weight="bold" text-anchor="middle">校区管理端与教师端</text>
+      <text x="100" y="45" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">移动端应用 / 报表查询</text>
+    </g>
+
+    <g transform="translate(60, 270)" filter="url(#shadow)">
+      <rect width="200" height="60" rx="8" fill="#FFF" stroke="#0078D4" stroke-width="1.5"/>
+      <text x="100" y="25" font-family="'Segoe UI', sans-serif" font-size="13" fill="#333" font-weight="bold" text-anchor="middle">教务支持与远程运营</text>
+      <text x="100" y="45" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">总部跨校区协同办公人员</text>
+    </g>
+
+    <g transform="translate(60, 500)" filter="url(#shadow)">
+      <rect width="200" height="100" rx="8" fill="#FFF" stroke="#008272" stroke-width="1.5"/>
+      <text x="100" y="25" font-family="'Segoe UI', sans-serif" font-size="13" fill="#008272" font-weight="bold" text-anchor="middle">线下教学点设备与网络</text>
+      <line x1="15" y1="40" x2="185" y2="40" stroke="#EEE" />
+      <text x="100" y="55" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">悦汇天地校区 / 景裕豪园校区</text>
+      <text x="100" y="75" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">大沥公园校区等局域网</text>
+      <text x="100" y="90" font-family="'Segoe UI', sans-serif" font-size="10" fill="#666" text-anchor="middle">教学数据同步</text>
+    </g>
+
+    <!-- ================= Zone 2: 统一网关与边界层 ================= -->
+    <g transform="translate(340, 190)" filter="url(#shadow)">
+      <rect width="160" height="100" rx="8" fill="#FFF" stroke="#0078D4" stroke-width="2" filter="url(#shadow)"/>
+      <text x="80" y="35" font-family="'Segoe UI', sans-serif" font-size="14" fill="#0078D4" font-weight="bold" text-anchor="middle">Azure Front Door</text>
+      <text x="80" y="55" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">全局统一公网入口 (Standard)</text>
+      <text x="80" y="70" font-family="'Segoe UI', sans-serif" font-size="10" fill="#666" text-anchor="middle">智能路由 / WAF 防护 / 加速</text>
+      <text x="80" y="85" font-family="'Segoe UI', sans-serif" font-size="10" fill="#D13438" text-anchor="middle">边界攻击防护与降低暴露面</text>
+    </g>
+
+    <g transform="translate(340, 330)" filter="url(#shadow)">
+      <rect width="160" height="80" rx="8" fill="#FFF" stroke="#0078D4" stroke-width="2" filter="url(#shadow)"/>
+      <text x="80" y="35" font-family="'Segoe UI', sans-serif" font-size="14" fill="#0078D4" font-weight="bold" text-anchor="middle">Azure Virtual Desktop</text>
+      <text x="80" y="55" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">受控的云端办公桌面环境</text>
+      <text x="80" y="70" font-family="'Segoe UI', sans-serif" font-size="10" fill="#666" text-anchor="middle">减少数据留存，提升跨校区安全</text>
+    </g>
+
+    <g transform="translate(340, 510)" filter="url(#shadow)">
+      <rect width="160" height="80" rx="8" fill="#FFF" stroke="#0078D4" stroke-width="2" filter="url(#shadow)"/>
+      <text x="80" y="35" font-family="'Segoe UI', sans-serif" font-size="14" fill="#0078D4" font-weight="bold" text-anchor="middle">Azure VPN Gateway</text>
+      <text x="80" y="55" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">IPsec 安全加密隧道 (VpnGw1)</text>
+      <text x="80" y="70" font-family="'Segoe UI', sans-serif" font-size="10" fill="#666" text-anchor="middle">线下校区与云端 Hub VNet 安全连接</text>
+    </g>
+
+    <!-- ================= Zone 3: 教学运营云中枢 ================= -->
+    <g transform="translate(600, 180)" filter="url(#shadow)">
+      <rect width="160" height="190" rx="10" fill="#FFF" stroke="#5C2D91" stroke-width="2.5"/>
+      <text x="80" y="35" font-family="'Segoe UI', sans-serif" font-size="15" fill="#5C2D91" font-weight="bold" text-anchor="middle">AKS 微服务集群</text>
+      <text x="80" y="60" font-family="'Segoe UI', sans-serif" font-size="12" fill="#333" font-weight="bold" text-anchor="middle">教学运营应用中枢</text>
+      <line x1="15" y1="75" x2="145" y2="75" stroke="#EEE" />
+      <text x="80" y="95" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">校区运营后台服务</text>
+      <text x="80" y="115" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">数据接口与同步服务</text>
+      <text x="80" y="135" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">家校互动服务</text>
+      <text x="80" y="155" font-family="'Segoe UI', sans-serif" font-size="11" fill="#D13438" text-anchor="middle">基于业务高峰自动扩缩容</text>
+      <text x="80" y="170" font-family="'Segoe UI', sans-serif" font-size="10" fill="#D13438" text-anchor="middle">业务/系统节点池物理隔离</text>
+    </g>
+
+    <g transform="translate(600, 410)" filter="url(#shadow)">
+      <rect width="160" height="100" rx="8" fill="#FFF" stroke="#D13438" stroke-width="2"/>
+      <text x="80" y="30" font-family="'Segoe UI', sans-serif" font-size="14" fill="#D13438" font-weight="bold" text-anchor="middle">Azure Firewall</text>
+      <rect x="25" y="40" width="110" height="18" rx="4" fill="#FFF5F5" stroke="#D13438"/>
+      <text x="80" y="52" font-family="'Segoe UI', sans-serif" font-size="11" fill="#D13438" font-weight="bold" text-anchor="middle">出入站流量控制</text>
+      <text x="80" y="75" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">部署于 Hub VNet，</text>
+      <text x="80" y="90" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">管控跨校区与云上网络访问策略</text>
+    </g>
+
+    <!-- ================= Zone 4: 数据分层治理底座 ================= -->
+    <g transform="translate(1050, 160)" filter="url(#shadow)">
+      <rect width="300" height="110" rx="10" fill="#FFF" stroke="#008272" stroke-width="2.5"/>
+      <text x="150" y="30" font-family="'Segoe UI', sans-serif" font-size="15" fill="#008272" font-weight="bold" text-anchor="middle">Azure SQL Database</text>
+      <rect x="100" y="40" width="100" height="18" rx="4" fill="#E6F4F1" stroke="#008272" stroke-width="0.5"/>
+      <text x="150" y="52" font-family="'Segoe UI', sans-serif" font-size="10" fill="#008272" text-anchor="middle">Private Endpoint</text>
+      <text x="150" y="75" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" font-weight="bold" text-anchor="middle">教育核心数据平台 (Business Critical / HA)</text>
+      <text x="150" y="95" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">安全存储学生档案、课程排班、学习记录</text>
+    </g>
+
+    <g transform="translate(1050, 310)" filter="url(#shadow)">
+      <rect width="300" height="100" rx="10" fill="#FFF" stroke="#008272" stroke-width="2"/>
+      <text x="150" y="30" font-family="'Segoe UI', sans-serif" font-size="15" fill="#008272" font-weight="bold" text-anchor="middle">Azure Cache for Redis</text>
+      <rect x="100" y="40" width="100" height="18" rx="4" fill="#E6F4F1" stroke="#008272" stroke-width="0.5"/>
+      <text x="150" y="52" font-family="'Segoe UI', sans-serif" font-size="10" fill="#008272" text-anchor="middle">Private Endpoint</text>
+      <text x="150" y="75" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">课堂实时状态、用户会话与高频报表结果缓存</text>
+      <text x="150" y="90" font-family="'Segoe UI', sans-serif" font-size="10" fill="#D13438" font-weight="bold" text-anchor="middle">Premium 层级高可用配置，提升访问性能</text>
+    </g>
+
+    <g transform="translate(1050, 460)" filter="url(#shadow)">
+      <rect width="300" height="100" rx="10" fill="#FFF" stroke="#008272" stroke-width="2"/>
+      <text x="150" y="30" font-family="'Segoe UI', sans-serif" font-size="15" fill="#008272" font-weight="bold" text-anchor="middle">Azure Storage Account (Blob)</text>
+      <rect x="100" y="40" width="100" height="18" rx="4" fill="#E6F4F1" stroke="#008272" stroke-width="0.5"/>
+      <text x="150" y="52" font-family="'Segoe UI', sans-serif" font-size="10" fill="#008272" text-anchor="middle">Private Endpoint</text>
+      <text x="150" y="75" font-family="'Segoe UI', sans-serif" font-size="11" fill="#333" text-anchor="middle">Hot / Cool 分层存储课件资料、报表与日志</text>
+      <text x="150" y="90" font-family="'Segoe UI', sans-serif" font-size="10" fill="#D13438" font-weight="bold" text-anchor="middle">生命周期管理策略自动归档长期历史数据</text>
+    </g>
+
+    <!-- ================= Zone 5: Security & Control ================= -->
+    <g transform="translate(80, 840)" filter="url(#shadow)">
+      <rect width="360" height="60" rx="8" fill="#FFF" stroke="#D13438" stroke-width="2"/>
+      <text x="180" y="25" font-family="'Segoe UI', sans-serif" font-size="14" fill="#D13438" font-weight="bold" text-anchor="middle">Microsoft Entra ID (统一身份与角色权限)</text>
+      <text x="180" y="45" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">管理系统及员工身份权限，确保校区教务、家长操作合规访问</text>
+    </g>
+
+    <g transform="translate(480, 840)" filter="url(#shadow)">
+      <rect width="360" height="60" rx="8" fill="#FFF" stroke="#D13438" stroke-width="2"/>
+      <text x="180" y="25" font-family="'Segoe UI', sans-serif" font-size="14" fill="#D13438" font-weight="bold" text-anchor="middle">Hub-Spoke 隔离网络边界 (Private Endpoint)</text>
+      <text x="180" y="45" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">核心数据库服务仅内网调用，隔离公网流量，实现最小权限访问</text>
+    </g>
+
+    <g transform="translate(880, 840)" filter="url(#shadow)">
+      <rect width="440" height="60" rx="8" fill="#FFF" stroke="#E65100" stroke-width="2"/>
+      <text x="220" y="25" font-family="'Segoe UI', sans-serif" font-size="14" fill="#E65100" font-weight="bold" text-anchor="middle">Defender for Cloud, Azure Monitor &amp; Key Vault</text>
+      <text x="220" y="45" font-family="'Segoe UI', sans-serif" font-size="11" fill="#666" text-anchor="middle">集中监控、凭据托管、配置风险扫描与安全审计追踪，形成端到端闭环防线</text>
+    </g>
+
+  </g>
+</svg>

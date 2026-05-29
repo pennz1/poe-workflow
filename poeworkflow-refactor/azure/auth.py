@@ -14,6 +14,8 @@ from config import (
     get_secret,
 )
 from frontend.ui import render_device_code_login
+
+_device_code_container = None
 from session import clear_session_persist, persist_session_state
 
 try:
@@ -31,6 +33,12 @@ def is_azure_token_valid() -> bool:
     return bool(st.session_state.get("azure_token")) and time.time() < expires_at
 
 
+def set_device_code_container(container) -> None:
+    """设置设备码登录 UI 的渲染容器（应在列外创建以获得全宽）。"""
+    global _device_code_container
+    _device_code_container = container
+
+
 def msal_device_code_login() -> None:
     """通过 MSAL Device Code Flow 登录 Azure，并将 access token 放入 session state。"""
     if msal is None:
@@ -46,7 +54,7 @@ def msal_device_code_login() -> None:
 
     user_code = flow["user_code"]
     verify_url = flow.get("verification_uri", "https://microsoft.com/devicelogin")
-    render_device_code_login(user_code, verify_url)
+    render_device_code_login(user_code, verify_url, container=_device_code_container)
 
     result = app.acquire_token_by_device_flow(flow)
     if "access_token" not in result:

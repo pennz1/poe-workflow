@@ -40,6 +40,17 @@ try:
 except ImportError:
     msal = None
 
+try:
+    from pricing_automation import (
+        run_pricing_export,
+        is_browser_profile_ready,
+        extract_resource_table,
+        PricingExportResult,
+    )
+    HAS_PRICING_AUTOMATION = True
+except ImportError:
+    HAS_PRICING_AUTOMATION = False
+
 # ──────────────────────────────────────────────
 # 常量
 # ──────────────────────────────────────────────
@@ -140,7 +151,8 @@ def check_secrets() -> bool:
 # ──────────────────────────────────────────────
 def get_openai_client() -> OpenAI:
     """创建 OpenAI 兼容客户端实例（支持 NewAPI 等网关）。"""
-    base_url = get_secret("AZURE_OPENAI_ENDPOINT").rstrip("/") + "/v1"
+    endpoint = get_secret("AZURE_OPENAI_ENDPOINT").rstrip("/")
+    base_url = endpoint if endpoint.endswith("/v1") else endpoint + "/v1"
     return OpenAI(
         api_key=get_secret("AZURE_OPENAI_KEY"),
         base_url=base_url,
@@ -211,7 +223,7 @@ SOLUTION_SYSTEM_PROMPT = (
     "请根据用户提供的【客户名称】和【背景信息】，生成一份完整、专业的 AI 售前解决方案架构文档。\n\n"
     "**标题要求（极其重要）：** 你的输出的第一行必须是一个 `#` 标题，格式为: `# [客户名称] - [具体方案名称]`。"
     "方案名称必须具体且针对客户业务，例如：\n"
-    "- `# 深圳跃瓦创新科技 - Azure AI 中台与多场景助手解决方案`\n"
+    "- `# 深圳跃瓦创新科技 - Azure AI 多场景助手解决方案`\n"
     "- `# 京华数码 - 智能外贸供应链 AI 平台方案`\n"
     "绝对不要使用笼统的'AI 解决方案架构文档'作为标题。\n\n"
     "**章节结构要求（必须严格遵循以下 8 个章节，使用中文数字编号 一、二、三...）：**\n\n"
@@ -223,7 +235,7 @@ SOLUTION_SYSTEM_PROMPT = (
     "用段落叙述客户的行业定位、痛点和机遇。不要用列表。\n\n"
     "## 四、需求摘要\n"
     "以 Markdown 表格形式列出需求，表头为：`| 类别 | 需求描述 |`。\n"
-    "**严格要求：表格只有 3 行数据（业务需求、功能需求、技术需求各 1 行），每格仅写 1-2 个关键需求点，用分号分隔，不展开解释。**\n"
+    "**严格要求：表格只有 3 行数据（业务需求、功能需求、技术需求各 1 行），每格仅写 2-3 个关键需求点，用分号分隔，不展开解释。**\n"
     "示例：\n"
     "| 类别 | 需求描述 |\n"
     "| --- | --- |\n"
@@ -232,13 +244,13 @@ SOLUTION_SYSTEM_PROMPT = (
     "| 技术需求 | 跨实例高可用；私有网络访问 |\n\n"
     "## 五、详细解决方案设计\n"
     "本节分为两部分，格式严格如下：\n\n"
-    "**第一部分（解决方案预览）：** 用 1-2 句纯文字段落，简要描述整体方案的核心部署思路和区域选择。不使用列表，不加粗，无符号，无表情，无卡片。\n\n"
+    "**第一部分（解决方案预览）：** 用 3-4 句纯文字段落，简要描述整体方案的核心部署思路和区域选择。不使用列表，不加粗，无符号，无表情，无卡片。\n\n"
     "**第二部分（详细资源用途）：** 紧接第一部分，直接列出每个 Azure 资源的详细用途，格式严格为：资源名称: 详细用途描述（1-2句）。每个资源单独占一行，资源名称与正文之间用冒号加空格分隔，不加粗资源名称，不使用项目符号（-、*、•），不使用任何表情或卡片。控制在 4-6 个资源行。\n"
     "示例（严格照此格式，不照抄内容）：\n"
-    "Azure OpenAI (GPT-5.4): 作为核心推理引擎，处理用户自然语言查询，生成个性化推荐和客服回复。\n"
-    "Azure AI Speech: 提供语音识别与语音合成能力，支撑语音交互入口和呼叫中心坐席辅助场景。\n"
-    "Azure AI Search: 构建向量检索索引，对接产品知识库，为模型提供精准的 RAG 上下文。\n"
-    "Azure API Management: 统一管理所有 AI 服务调用入口，实现限流、鉴权及 Token 消耗监控。\n"
+    "Azure OpenAI（具体型号）: 作为核心推理引擎，处理用户自然语言查询，生成个性化推荐和客服回复。\n"
+    "Azure AI Speech（具体型号）: 提供语音识别与语音合成能力，支撑语音交互入口和呼叫中心坐席辅助场景。\n"
+    "Azure AI Search（具体型号）: 构建向量检索索引，对接产品知识库，为模型提供精准的 RAG 上下文。\n"
+    "Azure API Management（具体型号）: 统一管理所有 AI 服务调用入口，实现限流、鉴权及 Token 消耗监控。\n"
     "绝对禁止在第二部分再拆分子功能列表或多个换行子句，每个资源描述必须是单独一行。\n\n"
     "## 六、安全架构\n"
     "格式与详细设计完全相同：每个要点 `关键词: 正文` 在同一行，不加粗关键词。控制在 2-3 个要点。例如：\n"
@@ -852,6 +864,8 @@ def _markdown_to_docx(doc, markdown_text: str, body_size=9):
     将 AI 返回的 Markdown 文本解析并写入 Word 文档。
     支持: 标题 (#/##/###)、列表 (-/*)、Markdown 表格、加粗 (**)、普通段落。
     """
+    # 预处理：将 <br> 变体转换为换行符
+    markdown_text = re.sub(r"<br\s*/?>", "\n", markdown_text)
     lines = markdown_text.split("\n")
     i = 0
     while i < len(lines):
@@ -3522,12 +3536,17 @@ def resolve_auto_inventory_csv(uploaded_inventory: Any) -> tuple[Optional[bytes]
 
 
 def format_auto_poe_log(message: str) -> str:
-    text = re.sub(r"\s+", " ", str(message or "")).strip()
+    text = str(message or "").strip()
+    if not text:
+        return ""
+    # 保留 Markdown 格式行（标题、颜色标注等）原样输出
+    if text.startswith("**") or text.startswith("---") or ":green[" in text or ":red[" in text or ":orange[" in text:
+        return text
+    text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^[^\w\u4e00-\u9fff]+", "", text).strip()
     text = text.removesuffix("...").strip()
     text = re.sub(r"https?://\S+", "[url]", text)
     text = re.sub(r"/subscriptions/[^\s；;，,]+", lambda match: match.group(0).rstrip("/").split("/")[-1], text, flags=re.I)
-    text = text.replace("✅", "").replace("⚠️", "").replace("ℹ️", "").strip()
     if not text:
         return ""
     return text
@@ -3537,6 +3556,9 @@ def should_display_auto_poe_log(message: str) -> bool:
     text = str(message or "").strip()
     if not text:
         return False
+    # Markdown 格式行（分模块标题、带颜色的结果行）始终显示
+    if text.startswith("**") or text.startswith("---") or ":green[" in text or ":red[" in text or ":orange[" in text:
+        return True
     interim_markers = [
         "正在",
         "开始",
@@ -3590,6 +3612,8 @@ def run_full_auto_poe(
     existing_pov_text: Optional[str],
     progress: Callable[[str], None],
 ) -> Dict[str, Any]:
+    progress("---")
+    progress("**一、AI 解决方案架构文档**")
     if existing_solution_text and existing_solution_text.strip():
         solution_artifact = create_solution_artifact_from_text(
             current_doc_type,
@@ -3597,25 +3621,27 @@ def run_full_auto_poe(
             customer_name,
             account_name,
         )
-        progress(f"成功复用文档：{solution_artifact['file_name']}")
+        progress(f"  :green[✅ 已复用] `{solution_artifact['file_name']}`")
     else:
         solution_artifact = generate_solution_artifact(
             current_doc_type, customer_name, account_name, customer_bg, solution_ref, infra_ref
         )
-        progress(f"成功生成文档：{solution_artifact['file_name']}")
+        progress(f"  :green[✅ 已生成] `{solution_artifact['file_name']}`")
 
     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
     st.session_state[target_key] = solution_artifact["content"]
     st.session_state["customer_name"] = customer_name
     st.session_state["account_name"] = account_name
 
+    progress("")
+    progress("**二、POV 部署计划文档**")
     if existing_pov_text and existing_pov_text.strip():
         pov_artifact = create_pov_artifact_from_text(
             existing_pov_text.strip(),
             customer_name,
             account_name,
         )
-        progress(f"成功复用文档：{pov_artifact['file_name']}")
+        progress(f"  :green[✅ 已复用] `{pov_artifact['file_name']}`")
     else:
         if not pov_start or not pov_end:
             raise RuntimeError("缺少 POV 开始日期或结束日期，无法生成 POV 部署计划。")
@@ -3630,13 +3656,56 @@ def run_full_auto_poe(
             pov_end,
             vendor_team,
         )
-        progress(f"成功生成文档：{pov_artifact['file_name']}")
+        progress(f"  :green[✅ 已生成] `{pov_artifact['file_name']}`")
     st.session_state["pov_text"] = pov_artifact["content"]
     st.session_state["pov_source_doc_type"] = current_doc_type
+
+    # ── Step 2.5: Pricing Calculator 自动导出 ──
+    pricing_artifact = None
+    pricing_result = None
+    if HAS_PRICING_AUTOMATION:
+        progress("")
+        progress("**三、Azure 价格估算表**")
+        progress("  正在自动化 Azure Pricing Calculator 导出...")
+        try:
+            annual_budget_val = parse_annual_budget_usd(annual_budget_text) or 0.0
+            # 计算预算上限（下一个档位），防止超标
+            budget_cap = 0.0
+            if annual_budget_val > 0:
+                for tier in BUDGET_TIERS:
+                    if tier > annual_budget_val:
+                        budget_cap = tier
+                        break
+                if budget_cap == 0:
+                    budget_cap = annual_budget_val * 1.5  # 最高档位用 1.5 倍封顶
+            pricing_result = run_pricing_export(
+                solution_text=solution_artifact["content"],
+                annual_budget=annual_budget_val,
+                account_name=account_name,
+                progress=progress,
+                headed=False,
+                budget_cap=budget_cap,
+            )
+            if pricing_result.xlsx_bytes:
+                pricing_artifact = {
+                    "file_name": f"{account_name}-Azure calculator.xlsx",
+                    "bytes": pricing_result.xlsx_bytes,
+                }
+                progress(f"  :green[✅ 已导出] `{pricing_artifact['file_name']}`")
+                if pricing_result.fallbacks:
+                    fallback_msgs = [f"{fb.original_service}({fb.original_sku})→{fb.resolved_sku}" for fb in pricing_result.fallbacks if fb.resolved_service != "(跳过)"]
+                    if fallback_msgs:
+                        progress(f"  ⚠️ 资源降级: {'; '.join(fallback_msgs)}")
+            else:
+                progress(f"  ⚠️ 价格导出未成功: {pricing_result.error or '未知错误'}")
+        except Exception as e:
+            progress(f"  ⚠️ 价格导出异常（不影响其他文档）: {e}")
 
     # 从解决方案文档中提取主要区域，用于评估目标地区
     target_location = _extract_dominant_region(solution_artifact["content"])
 
+    progress("")
+    progress("**四、Azure Migrate 评估报告**")
     migrate_result = run_azure_migrate_assessment(
         token, subscription_id, resource_group, account_name, assessment_name, annual_budget_text, progress,
         target_location=target_location,
@@ -3653,16 +3722,22 @@ def run_full_auto_poe(
         "file_name": f"{account_name}-Azure Migrate Assessment.xlsx",
         "bytes": excel_bytes,
     }
-    progress(f"成功下载评估报告：{assessment_artifact['file_name']}")
+    progress(f"  :green[✅ 已生成] `{assessment_artifact['file_name']}`")
 
-    zip_bytes = create_poe_zip([solution_artifact, pov_artifact, assessment_artifact])
-    progress(f"成功生成 POE 套件：{account_name}-POE-Complete.zip")
+    # 打包所有交付物
+    all_artifacts = [solution_artifact, pov_artifact, assessment_artifact]
+    if pricing_artifact:
+        all_artifacts.append(pricing_artifact)
+    zip_bytes = create_poe_zip(all_artifacts)
+    progress(f"成功生成 POE 套件：{account_name}-POE-Complete.zip（{len(all_artifacts)} 个文件）")
     return {
         "zip_bytes": zip_bytes,
         "zip_name": f"{account_name}-POE-Complete.zip",
         "solution": solution_artifact,
         "pov": pov_artifact,
         "assessment": assessment_artifact,
+        "pricing": pricing_artifact,
+        "pricing_result": pricing_result,
         "migrate": migrate_result,
     }
 
@@ -3810,6 +3885,26 @@ def render_full_auto_poe_area(
         else:
             st.error("Azurecsvtemplate.csv 未找到")
 
+    # ── 浏览器 Profile 状态（价格计算器自动化）──
+    if HAS_PRICING_AUTOMATION:
+        browser_ready = is_browser_profile_ready()
+        browser_col1, browser_col2 = st.columns([2, 1])
+        with browser_col1:
+            if browser_ready:
+                st.caption("🌐 价格计算器浏览器 Profile 已就绪")
+            else:
+                st.caption("🌐 价格计算器浏览器 Profile 未初始化（首次需手动登录）")
+        with browser_col2:
+            if st.button("初始化浏览器" if not browser_ready else "重新登录", key="btn_init_browser", use_container_width=True):
+                with st.spinner("正在打开浏览器，请在弹出窗口中登录 Azure..."):
+                    try:
+                        from pricing_automation import initialize_browser_profile
+                        initialize_browser_profile()
+                        st.success("✅ 浏览器 Profile 已保存")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"浏览器初始化失败: {e}")
+
     workflow_ready = all(item[1] for item in readiness_items)
 
     if st.button(
@@ -3871,7 +3966,8 @@ def render_full_auto_poe_area(
                     formatted = format_auto_poe_log(message)
                     if formatted and should_display_auto_poe_log(formatted):
                         log_lines.append(formatted)
-                        log_placeholder.code("\n".join(log_lines[-120:]), language="text")
+                        # 使用 markdown 渲染，支持加粗、颜色等格式
+                        log_placeholder.markdown("\n\n".join(log_lines[-120:]))
 
                 result = run_full_auto_poe(
                     current_doc_type=current_doc_type,
@@ -3905,6 +4001,12 @@ def render_full_auto_poe_area(
                     "solution_file_name": result["solution"]["file_name"],
                     "pov_file_name": result["pov"]["file_name"],
                     "assessment_file_name": result["assessment"]["file_name"],
+                    "pricing_file_name": result["pricing"]["file_name"] if result.get("pricing") else None,
+                    "pricing_fallbacks": [
+                        f"{fb.original_service}({fb.original_sku})→{fb.resolved_sku}"
+                        for fb in (result.get("pricing_result") or PricingExportResult()).fallbacks
+                        if fb.resolved_service != "(跳过)"
+                    ] if HAS_PRICING_AUTOMATION else [],
                     "project_name": result["migrate"]["project_name"],
                     "assessment_name": result["migrate"]["assessment_name"],
                     "machine_count": len(result["migrate"].get("assessed_machines", [])),
@@ -3928,13 +4030,16 @@ def render_full_auto_poe_area(
         result = st.session_state.get("auto_poe_result", {})
         annualized_cost = result.get("annualized_cost")
         budget_target = result.get("budget_target")
+        generated_items = [
+            ("解决方案架构文档", result.get("solution_file_name") or "-"),
+            ("POV 文档", result.get("pov_file_name") or "-"),
+            ("迁移评估文档", result.get("assessment_file_name") or "-"),
+        ]
+        if result.get("pricing_file_name"):
+            generated_items.append(("价格估算表", result.get("pricing_file_name")))
         render_auto_poe_result(
             customer_name=result.get("customer_name") or customer_name.strip() or account_name.strip() or "该客户",
-            generated_items=[
-                ("解决方案架构文档", result.get("solution_file_name") or "-"),
-                ("POV 文档", result.get("pov_file_name") or "-"),
-                ("迁移评估文档", result.get("assessment_file_name") or "-"),
-            ],
+            generated_items=generated_items,
             migrate_items=[
                 ("Azure Migrate 项目", result.get("project_name") or "-"),
                 ("迁移评估名称", result.get("assessment_name") or "-"),
@@ -3949,6 +4054,9 @@ def render_full_auto_poe_area(
         )
         if budget_target and not result.get("budget_target_met", True):
             st.warning("自动调整 3 轮后仍未落入用户预估年消耗的档次区间，请在 Azure Portal 的评估设置中手动调整。")
+        pricing_fallbacks = result.get("pricing_fallbacks", [])
+        if pricing_fallbacks:
+            st.warning(f"价格计算器资源降级: {'; '.join(pricing_fallbacks)}")
         finish_time = st.session_state.get("auto_poe_finish_time")
         if finish_time:
             st.info(f"✅ 任务完成时间：{finish_time}")

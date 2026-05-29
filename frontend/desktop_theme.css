@@ -17,6 +17,102 @@
     --poe-warning-soft: oklch(96% 0.034 78);
     --poe-radius: 8px;
     --poe-focus: 0 0 0 3px oklch(72% 0.09 250 / 0.32);
+    --poe-sidebar-bg: oklch(94.8% 0.01 248);
+    --poe-result-bg: oklch(98% 0.018 152);
+    --poe-result-border: oklch(82% 0.05 152);
+    --poe-result-divider: oklch(86% 0.04 152);
+    --poe-block-bg: oklch(98.8% 0.004 248);
+    --poe-input-border: var(--poe-line);
+    --poe-accent-border: oklch(82% 0.052 250);
+    --poe-success-border: oklch(82% 0.05 152);
+    --poe-warning-border: oklch(84% 0.06 78);
+    --poe-warning-text: oklch(43% 0.09 78);
+    --poe-on-accent: oklch(98% 0.01 250);
+    --poe-on-success: oklch(98% 0.01 152);
+    --poe-device-copy-bg: oklch(94.5% 0.035 78);
+    --poe-device-copy-border: oklch(80% 0.07 78);
+    --poe-device-copy-text: oklch(39% 0.085 78);
+    --poe-device-link-bg: oklch(99.2% 0.003 248);
+    --poe-device-link-border: oklch(86.5% 0.014 248);
+    --poe-device-link-text: oklch(39% 0.15 250);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --poe-bg: oklch(16% 0.012 248);
+        --poe-surface: oklch(20% 0.014 248);
+        --poe-surface-2: oklch(25% 0.016 248);
+        --poe-surface-3: oklch(30% 0.018 248);
+        --poe-line: oklch(34% 0.018 248);
+        --poe-line-strong: oklch(44% 0.022 248);
+        --poe-text: oklch(92% 0.012 248);
+        --poe-muted: oklch(68% 0.016 248);
+        --poe-soft: oklch(55% 0.014 248);
+        --poe-accent: oklch(62% 0.15 250);
+        --poe-accent-strong: oklch(72% 0.15 250);
+        --poe-accent-soft: oklch(26% 0.04 250);
+        --poe-success: oklch(62% 0.12 152);
+        --poe-success-soft: oklch(24% 0.04 152);
+        --poe-warning: oklch(72% 0.12 78);
+        --poe-warning-soft: oklch(26% 0.04 78);
+        --poe-focus: 0 0 0 3px oklch(62% 0.09 250 / 0.4);
+        --poe-sidebar-bg: oklch(18% 0.012 248);
+        --poe-result-bg: oklch(22% 0.03 152);
+        --poe-result-border: oklch(36% 0.05 152);
+        --poe-result-divider: oklch(32% 0.04 152);
+        --poe-block-bg: oklch(22% 0.012 248);
+        --poe-input-border: var(--poe-line);
+        --poe-accent-border: oklch(42% 0.08 250);
+        --poe-success-border: oklch(38% 0.06 152);
+        --poe-warning-border: oklch(42% 0.07 78);
+        --poe-warning-text: oklch(72% 0.1 78);
+        --poe-on-accent: oklch(98% 0.01 250);
+        --poe-on-success: oklch(98% 0.01 152);
+        --poe-device-copy-bg: oklch(28% 0.04 78);
+        --poe-device-copy-border: oklch(42% 0.07 78);
+        --poe-device-copy-text: oklch(78% 0.08 78);
+        --poe-device-link-bg: oklch(22% 0.014 248);
+        --poe-device-link-border: oklch(34% 0.018 248);
+        --poe-device-link-text: oklch(72% 0.15 250);
+    }
+}
+
+:root[data-theme="dark"] {
+    --poe-bg: oklch(16% 0.012 248);
+    --poe-surface: oklch(20% 0.014 248);
+    --poe-surface-2: oklch(25% 0.016 248);
+    --poe-surface-3: oklch(30% 0.018 248);
+    --poe-line: oklch(34% 0.018 248);
+    --poe-line-strong: oklch(44% 0.022 248);
+    --poe-text: oklch(92% 0.012 248);
+    --poe-muted: oklch(68% 0.016 248);
+    --poe-soft: oklch(55% 0.014 248);
+    --poe-accent: oklch(62% 0.15 250);
+    --poe-accent-strong: oklch(72% 0.15 250);
+    --poe-accent-soft: oklch(26% 0.04 250);
+    --poe-success: oklch(62% 0.12 152);
+    --poe-success-soft: oklch(24% 0.04 152);
+    --poe-warning: oklch(72% 0.12 78);
+    --poe-warning-soft: oklch(26% 0.04 78);
+    --poe-focus: 0 0 0 3px oklch(62% 0.09 250 / 0.4);
+    --poe-sidebar-bg: oklch(18% 0.012 248);
+    --poe-result-bg: oklch(22% 0.03 152);
+    --poe-result-border: oklch(36% 0.05 152);
+    --poe-result-divider: oklch(32% 0.04 152);
+    --poe-block-bg: oklch(22% 0.012 248);
+    --poe-input-border: var(--poe-line);
+    --poe-accent-border: oklch(42% 0.08 250);
+    --poe-success-border: oklch(38% 0.06 152);
+    --poe-warning-border: oklch(42% 0.07 78);
+    --poe-warning-text: oklch(72% 0.1 78);
+    --poe-on-accent: oklch(98% 0.01 250);
+    --poe-on-success: oklch(98% 0.01 152);
+    --poe-device-copy-bg: oklch(28% 0.04 78);
+    --poe-device-copy-border: oklch(42% 0.07 78);
+    --poe-device-copy-text: oklch(78% 0.08 78);
+    --poe-device-link-bg: oklch(22% 0.014 248);
+    --poe-device-link-border: oklch(34% 0.018 248);
+    --poe-device-link-text: oklch(72% 0.15 250);
 }
 
 html,
@@ -48,7 +144,7 @@ select {
 }
 
 [data-testid="stSidebar"] {
-    background: oklch(94.8% 0.01 248);
+    background: var(--poe-sidebar-bg);
     border-right: 1px solid var(--poe-line);
 }
 
@@ -120,20 +216,20 @@ select {
 .poe-badge[data-tone="accent"],
 .poe-pill[data-tone="accent"] {
     background: var(--poe-accent-soft);
-    border-color: oklch(82% 0.052 250);
+    border-color: var(--poe-accent-border);
     color: var(--poe-accent-strong);
 }
 
 .poe-pill[data-tone="success"] {
     background: var(--poe-success-soft);
-    border-color: oklch(82% 0.05 152);
+    border-color: var(--poe-success-border);
     color: var(--poe-success);
 }
 
 .poe-pill[data-tone="warning"] {
     background: var(--poe-warning-soft);
-    border-color: oklch(84% 0.06 78);
-    color: oklch(43% 0.09 78);
+    border-color: var(--poe-warning-border);
+    color: var(--poe-warning-text);
 }
 
 .poe-pill[data-tone="muted"] {
@@ -189,12 +285,12 @@ select {
 
 .poe-step[data-state="done"] {
     background: var(--poe-success-soft);
-    border-color: oklch(82% 0.05 152);
+    border-color: var(--poe-success-border);
 }
 
 .poe-step[data-state="ready"] {
     background: var(--poe-accent-soft);
-    border-color: oklch(82% 0.052 250);
+    border-color: var(--poe-accent-border);
 }
 
 .poe-step[data-state="blocked"] {
@@ -221,18 +317,18 @@ select {
     position: absolute;
     inset: -0.32rem;
     border-radius: 999px;
-    border: 1px solid oklch(70% 0.09 250 / 0.5);
+    border: 1px solid color-mix(in oklch, var(--poe-accent) 50%, transparent);
     animation: poe-pulse 1.55s cubic-bezier(.2,.8,.2,1) infinite;
 }
 
 .poe-step[data-state="done"] .poe-step-num {
     background: var(--poe-success);
-    color: oklch(98% 0.01 152);
+    color: var(--poe-on-success);
 }
 
 .poe-step[data-state="ready"] .poe-step-num {
     background: var(--poe-accent);
-    color: oklch(98% 0.01 250);
+    color: var(--poe-on-accent);
 }
 
 .poe-step-title {
@@ -271,12 +367,12 @@ select {
 
 .poe-ready-item[data-state="done"] {
     background: var(--poe-success-soft);
-    border-color: oklch(82% 0.05 152);
+    border-color: var(--poe-success-border);
 }
 
 .poe-ready-item[data-state="todo"] {
     background: var(--poe-warning-soft);
-    border-color: oklch(84% 0.06 78);
+    border-color: var(--poe-warning-border);
 }
 
 .poe-ready-dot {
@@ -309,9 +405,9 @@ select {
 .poe-result-panel {
     margin: 0.95rem 0 0.75rem;
     padding: 0.95rem;
-    border: 1px solid oklch(82% 0.05 152);
+    border: 1px solid var(--poe-result-border);
     border-radius: 10px;
-    background: oklch(98% 0.018 152);
+    background: var(--poe-result-bg);
 }
 
 .poe-result-title {
@@ -319,7 +415,7 @@ select {
     align-items: flex-start;
     gap: 0.7rem;
     padding-bottom: 0.75rem;
-    border-bottom: 1px solid oklch(86% 0.04 152);
+    border-bottom: 1px solid var(--poe-result-divider);
 }
 
 .poe-result-mark {
@@ -330,7 +426,7 @@ select {
     place-items: center;
     border-radius: 999px;
     background: var(--poe-success);
-    color: oklch(98% 0.01 152);
+    color: var(--poe-on-success);
     font-size: 0.95rem;
     font-weight: 820;
 }
@@ -377,7 +473,7 @@ select {
     align-items: center;
     min-height: 2.2rem;
     padding: 0.42rem 0.55rem;
-    border: 1px solid oklch(88% 0.018 248);
+    border: 1px solid var(--poe-line);
     border-radius: var(--poe-radius);
     background: var(--poe-surface);
 }
@@ -391,7 +487,7 @@ select {
 .poe-result-metric {
     min-height: 3.2rem;
     padding: 0.5rem 0.55rem;
-    border: 1px solid oklch(88% 0.018 248);
+    border: 1px solid var(--poe-line);
     border-radius: var(--poe-radius);
     background: var(--poe-surface);
 }
@@ -441,20 +537,20 @@ select {
 }
 
 .poe-device-copy {
-    border: 1px solid oklch(80% 0.07 78);
-    background: oklch(94.5% 0.035 78);
-    color: oklch(39% 0.085 78);
+    border: 1px solid var(--poe-device-copy-border);
+    background: var(--poe-device-copy-bg);
+    color: var(--poe-device-copy-text);
 }
 
 .poe-device-copy.is-copied {
-    border-color: oklch(48% 0.105 152);
-    background: oklch(48% 0.105 152);
+    border-color: var(--poe-success);
+    background: var(--poe-success);
 }
 
 .poe-device-link {
-    border: 1px solid oklch(86.5% 0.014 248);
-    background: oklch(99.2% 0.003 248);
-    color: oklch(39% 0.15 250);
+    border: 1px solid var(--poe-device-link-border);
+    background: var(--poe-device-link-bg);
+    color: var(--poe-device-link-text);
 }
 
 .poe-sidebar-status {
@@ -484,7 +580,7 @@ select {
 div[data-testid="stVerticalBlockBorderWrapper"] {
     border-color: var(--poe-line) !important;
     border-radius: var(--poe-radius) !important;
-    background: oklch(98.8% 0.004 248) !important;
+    background: var(--poe-block-bg) !important;
 }
 
 div[data-testid="stForm"] {
@@ -517,7 +613,7 @@ div.stButton > button[kind="primary"],
 .stFormSubmitButton > button[kind="primary"] {
     background: var(--poe-accent) !important;
     border-color: var(--poe-accent) !important;
-    color: oklch(98% 0.01 250) !important;
+    color: var(--poe-on-accent) !important;
 }
 
 div.stButton > button[kind="primary"]:hover,
@@ -563,4 +659,139 @@ div[data-testid="stFileUploader"] section {
     border-color: var(--poe-line) !important;
     border-radius: var(--poe-radius) !important;
     background: var(--poe-surface) !important;
+}
+
+/* Streamlit dark mode overrides for elements that use inline/default colors */
+div.stButton > button:not([kind="primary"]) {
+    background: var(--poe-surface) !important;
+    border-color: var(--poe-line) !important;
+    color: var(--poe-text) !important;
+}
+
+div.stButton > button:not([kind="primary"]):hover {
+    background: var(--poe-surface-2) !important;
+    border-color: var(--poe-line-strong) !important;
+}
+
+[data-testid="stExpander"] {
+    border-color: var(--poe-line) !important;
+    background: var(--poe-surface) !important;
+}
+
+[data-testid="stExpander"] summary {
+    color: var(--poe-text) !important;
+}
+
+div[data-testid="stMarkdownContainer"] {
+    color: var(--poe-text) !important;
+}
+
+div[data-testid="stMarkdownContainer"] p,
+div[data-testid="stMarkdownContainer"] li {
+    color: var(--poe-text) !important;
+}
+
+label[data-testid="stWidgetLabel"] {
+    color: var(--poe-text) !important;
+}
+
+[data-testid="stRadio"] label span {
+    color: var(--poe-text) !important;
+}
+
+/* Force text color on Streamlit's emotion-styled elements */
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] * {
+    color: var(--poe-text) !important;
+}
+
+[data-testid="stSidebar"] .poe-pill[data-tone="success"] {
+    color: var(--poe-success) !important;
+}
+
+[data-testid="stSidebar"] .poe-pill[data-tone="warning"] {
+    color: var(--poe-warning-text) !important;
+}
+
+/* Input elements text color */
+div[data-testid="stTextInput"] input,
+div[data-testid="stTextArea"] textarea {
+    color: var(--poe-text) !important;
+}
+
+div[data-testid="stTextInput"] input::placeholder,
+div[data-testid="stTextArea"] textarea::placeholder {
+    color: var(--poe-muted) !important;
+    opacity: 0.7;
+}
+
+/* Selectbox text */
+div[data-testid="stSelectbox"] [data-baseweb="select"] *,
+div[data-baseweb="select"] * {
+    color: var(--poe-text) !important;
+}
+
+div[data-baseweb="select"] [aria-disabled="true"],
+div[data-baseweb="select"] [data-baseweb="select"] div[aria-selected] {
+    color: var(--poe-muted) !important;
+}
+
+/* Selectbox dropdown/popover */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] ul,
+div[data-baseweb="popover"] li {
+    background: var(--poe-surface) !important;
+    color: var(--poe-text) !important;
+}
+
+div[data-baseweb="popover"] li:hover,
+div[data-baseweb="popover"] li[aria-selected="true"] {
+    background: var(--poe-surface-2) !important;
+}
+
+/* Radio buttons */
+[data-testid="stRadio"] div[role="radiogroup"] label {
+    color: var(--poe-text) !important;
+}
+
+[data-testid="stRadio"] div[role="radiogroup"] label p {
+    color: var(--poe-text) !important;
+}
+
+/* Text area helper text */
+div[data-testid="stTextArea"] span,
+.st-emotion-cache-0 {
+    color: var(--poe-muted) !important;
+}
+
+/* Tab labels */
+.stTabs [data-baseweb="tab"] p,
+.stTabs [data-baseweb="tab"] {
+    color: var(--poe-muted) !important;
+}
+
+.stTabs [aria-selected="true"],
+.stTabs [aria-selected="true"] p {
+    color: var(--poe-accent-strong) !important;
+}
+
+/* Global catch-all: override Streamlit's default rgb(49, 51, 63) text color */
+.stApp,
+.stApp [class*="st-emotion-cache"],
+.stApp [class*="st-"] {
+    color: var(--poe-text);
+}
+
+/* Streamlit header/toolbar */
+[data-testid="stHeader"] {
+    background: var(--poe-bg) !important;
+}
+
+[data-testid="stToolbar"] button {
+    color: var(--poe-muted) !important;
+}
+
+/* Checkbox and toggle labels */
+[data-testid="stCheckbox"] label span {
+    color: var(--poe-text) !important;
 }

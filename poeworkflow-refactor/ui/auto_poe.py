@@ -15,10 +15,11 @@ from azure.auth import (
     list_azure_resource_groups,
     list_azure_subscriptions,
     msal_device_code_login,
+    set_device_code_container,
 )
 from azure.migrate import _safe_azure_name
 from budget.parser import _format_usd, parse_annual_budget_usd
-from budget.tier import _get_template_machine_names, load_tier_cache, snap_budget_to_tier
+from budget.tier import _get_template_machine_names, budget_target_range, format_budget_target_range, load_tier_cache
 from config import BUILTIN_CSV_PATH
 from documents.pov import has_meaningful_pov_team
 from frontend.ui import render_auto_poe_result, render_readiness, render_workflow_steps
@@ -50,7 +51,13 @@ def render_full_auto_poe_area(
         or resolved_customer_name
     )
     resolved_budget_text = budget.strip() or str(st.session_state.get("budget") or "").strip()
-    default_assessment_name = _safe_azure_name(resolved_account_name or resolved_customer_name, "poe", "assessment", 55)
+    default_assessment_name = _safe_azure_name(resolved_account_name or resolved_customer_name, "poe", "", 55)
+    previous_assessment_default = st.session_state.get("_auto_assessment_default")
+    current_assessment_name = str(st.session_state.get("auto_assessment_name") or "").strip()
+    if not current_assessment_name or current_assessment_name in {"poeassessment", previous_assessment_default}:
+        st.session_state["auto_assessment_name"] = default_assessment_name
+        current_assessment_name = default_assessment_name
+    st.session_state["_auto_assessment_default"] = default_assessment_name
     assessment_name = st.session_state.get("auto_assessment_name", default_assessment_name)
     budget_value = parse_annual_budget_usd(resolved_budget_text)
     pov_start = st.session_state.get("pov_start_date")
@@ -63,7 +70,8 @@ def render_full_auto_poe_area(
     if existing_pov_text and pov_source_doc_type and pov_source_doc_type != current_doc_type:
         existing_pov_text = None
     builtin_csv_ok = os.path.exists(BUILTIN_CSV_PATH)
-    matched_tier = snap_budget_to_tier(budget_value) if budget_value and budget_value > 0 else None
+    matched_range = budget_target_range(budget_value)
+    matched_tier = matched_range["tier"] if budget_value and budget_value > 0 else None
     tier_cache = load_tier_cache()
     tier_learned = bool(tier_cache.get("tiers", {}).get(str(matched_tier))) if matched_tier else False
     has_existing_solution = bool(existing_solution_text)
@@ -97,6 +105,7 @@ def render_full_auto_poe_area(
         render_readiness(readiness_items)
 
     # ── Azure 登录 + 订阅/资源组 — 单行 ──
+    device_code_slot = st.container()
     az_c1, az_c2, az_c3 = st.columns([1, 1.5, 1.5])
     with az_c1:
         if azure_logged_in:
@@ -107,6 +116,7 @@ def render_full_auto_poe_area(
         else:
             if st.button("登录 Azure", type="primary", use_container_width=True, key="btn_azure_login"):
                 try:
+                    set_device_code_container(device_code_slot)
                     msal_device_code_login()
                     st.rerun()
                 except Exception as exc:
@@ -157,17 +167,20 @@ def render_full_auto_poe_area(
     # ── 评估名称 + 模板状态 — 单行 ──
     name_c1, name_c2 = st.columns([1, 2])
     with name_c1:
-        assessment_name = st.text_input("评估名称", value=default_assessment_name, key="auto_assessment_name")
+        assessment_name = st.text_input("评估名称", value=assessment_name, key="auto_assessment_name")
     with name_c2:
         if builtin_csv_ok:
             template_names = _get_template_machine_names()
             if matched_tier:
                 tier_label = _format_usd(float(matched_tier))
+                range_label = format_budget_target_range(matched_range)
+                tier_label_md = tier_label.replace("$", "\\$")
+                range_label_md = range_label.replace("$", "\\$")
                 if tier_learned:
                     learned_count = tier_cache["tiers"][str(matched_tier)]["machine_count"]
-                    st.caption(f"内置模板 {len(template_names)} 台 | 规模 {tier_label} | 已学习 → {learned_count} 台")
+                    st.caption(f"内置模板 {len(template_names)} 台 | 规模 {tier_label_md} | 目标 {range_label_md} | 已学习 → {learned_count} 台")
                 else:
-                    st.caption(f"内置模板 {len(template_names)} 台 | 规模 {tier_label} | 首次运行将自动学习")
+                    st.caption(f"内置模板 {len(template_names)} 台 | 规模 {tier_label_md} | 目标 {range_label_md} | 首次运行将自动学习")
             else:
                 st.caption(f"内置模板 {len(template_names)} 台 | 请填写预估年消耗匹配规模")
         else:
@@ -274,6 +287,7 @@ def render_full_auto_poe_area(
                     "portal_inventory_count": result["migrate"].get("portal_inventory_count", 0),
                     "annualized_cost": result["migrate"].get("annualized_cost"),
                     "budget_target": result["migrate"].get("budget_target"),
+                    "budget_target_range_label": result["migrate"].get("budget_target_range_label"),
                     "budget_target_met": result["migrate"].get("budget_target_met", True),
                     "csv_source": "内置模板（Azurecsvtemplate.csv）",
                     "tier": result["migrate"].get("tier"),
@@ -309,6 +323,7 @@ def render_full_auto_poe_area(
                 ("评估服务器数", f"{result.get('machine_count', 0)} 台"),
                 ("年化估算", _format_usd(annualized_cost)),
                 ("用户预估", _format_usd(budget_target)),
+                ("目标区间", result.get("budget_target_range_label") or "-"),
             ],
         )
         if budget_target and not result.get("budget_target_met", True):

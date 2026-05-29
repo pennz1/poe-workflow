@@ -75,9 +75,6 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                     # 同步写入 solution_text / infra_text，使 POV 等后续步骤可立即识别到文档
                     target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
                     st.session_state[target_key] = imported_text
-                    st.session_state["customer_name"] = customer_name.strip() if customer_name.strip() else "未命名客户"
-                    st.session_state["account_name"] = account_name.strip() if account_name.strip() else (customer_name.strip() or "未命名客户")
-                    st.session_state["budget"] = budget
                     st.session_state.pop("pov_text", None)
                     persist_session_state()
                     st.rerun()
@@ -129,9 +126,6 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                                 result_text = call_azure_openai(system_prompt, user_ctx)
                                 target_key = "solution_text" if current_doc_type == "AI" else "infra_text"
                                 st.session_state[target_key] = result_text
-                                st.session_state["customer_name"] = cust
-                                st.session_state["account_name"] = account_name.strip() if account_name.strip() else cust
-                                st.session_state["budget"] = budget
                                 st.session_state.pop("pov_text", None)
                                 st.session_state.pop("imported_doc_text", None)
                             persist_session_state()
@@ -195,9 +189,6 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                                 )
                             sol_text = call_azure_openai(build_solution_system_prompt(False), user_ctx)
                             st.session_state["solution_text"] = sol_text
-                            st.session_state["customer_name"] = customer_name
-                            st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
-                            st.session_state["budget"] = budget
                             st.session_state.pop("pov_text", None)
                         persist_session_state()
                         st.rerun()
@@ -241,9 +232,6 @@ def render_solution_tab(customer_name, account_name, budget, customer_bg, soluti
                                 )
                             infra_text = call_azure_openai(build_infra_system_prompt(False), user_ctx)
                             st.session_state["infra_text"] = infra_text
-                            st.session_state["customer_name"] = customer_name
-                            st.session_state["account_name"] = account_name.strip() if account_name.strip() else customer_name
-                            st.session_state["budget"] = budget
                             st.session_state.pop("pov_text", None)
                         persist_session_state()
                         st.rerun()
@@ -515,6 +503,19 @@ def render_yearly_tab(budget, account_name=""):
                         return str(v).strip().rstrip("\t").strip()
                 return None
 
+            def _estimate_created_date():
+                import random as _ts_rng
+                from datetime import timedelta as _td
+
+                pov_start = st.session_state.get("pov_start_date")
+                pov_end = st.session_state.get("pov_end_date")
+                if not (pov_start and pov_end) or pov_end < pov_start:
+                    return None
+                delta_days = (pov_end - pov_start).days
+                return pov_start + _td(days=_ts_rng.randint(0, delta_days))
+
+            estimate_created_date = _estimate_created_date()
+
             def _process_sheet(ws):
                 hrow = _find_header_row(ws)
                 if hrow is None:
@@ -576,7 +577,21 @@ def render_yearly_tab(budget, account_name=""):
                 tcell.font = _Font(bold=True, name="Calibri", size=11)
 
                 ws.column_dimensions[yearly_letter].width = 22
-                
+
+                # 修改时间戳：只替换月/日，保留原始年份与时分秒。
+                import re as _ts_re
+                if estimate_created_date:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            v = cell.value
+                            if isinstance(v, str) and "This estimate was created at" in v:
+                                cell.value = _ts_re.sub(
+                                    r'(\d{1,2})/(\d{1,2})(/\d{4})',
+                                    f"{estimate_created_date.month}/{estimate_created_date.day}\\3",
+                                    v,
+                                    count=1,
+                                )
+
                 account = _get_account_name(ws)
                 return True, "处理成功", account
 
@@ -593,7 +608,7 @@ def render_yearly_tab(budget, account_name=""):
 
                     # 优先使用用户输入的账户名，其次使用 Excel 中提取的名称
                     _budget = st.session_state.get("budget", budget) or "未填写"
-                    _acct_from_input = st.session_state.get("account_name") or account_name.strip()
+                    _acct_from_input = st.session_state.get("account_name") or (account_name or "").strip()
                     _acct_final = _acct_from_input or account_name or uploaded_price.name.replace(".xlsx", "")
                     new_dl_name = f"{_acct_final}-Azure calculator.xlsx"
 
@@ -623,3 +638,115 @@ def render_yearly_tab(budget, account_name=""):
             use_container_width=True,
             key="dl_yearly",
         )
+
+
+# ════════════════════════════════════════════════════════
+# 售后价格表 Tab
+# ════════════════════════════════════════════════════════
+
+def render_postsales_tab(budget, account_name=""):
+    """售后 Azure Calculator 生成 Tab。
+
+    用户输入年消耗目标 + 上传售前 xlsx（支持多个） → 调整数量生成售后 xlsx。
+    """
+    st.markdown(
+        "上传售前生成的 **Azure Calculator xlsx**，输入售后年消耗目标值，"
+        "系统将在原文件年消耗 ±5% 范围内调整数量，且保证超过目标值。支持同时上传多个文件。"
+    )
+
+    st.divider()
+
+    col_target, col_upload = st.columns([1, 2])
+    with col_target:
+        postsales_target = st.number_input(
+            "售后年消耗目标 (USD)",
+            min_value=1000.0,
+            max_value=10_000_000.0,
+            value=60000.0,
+            step=5000.0,
+            format="%.0f",
+            key="postsales_annual_target",
+            help="生成的售后价格表年总消耗将在原文件 ±5% 范围内浮动，且保证超过此值",
+        )
+
+    with col_upload:
+        uploaded_presales_files = st.file_uploader(
+            "上传售前 Azure Calculator (.xlsx)",
+            type=["xlsx"],
+            key="upload_postsales_excel",
+            help="支持标准 Azure 定价计算器导出格式，可同时选择多个文件",
+            accept_multiple_files=True,
+        )
+
+    if uploaded_presales_files:
+        if st.button("生成售后价格表", type="primary", use_container_width=True, key="btn_gen_postsales"):
+            from budget.postsales import process_postsales_excel
+            from llm.client import call_azure_openai
+            from llm.prompts import POSTSALES_PARSE_PROMPT
+
+            progress_area = st.empty()
+
+            def _progress(msg):
+                progress_area.info(msg)
+
+            try:
+                all_outputs = []  # list of (filename, bytes, results)
+
+                with st.spinner("正在处理..."):
+                    for idx, uploaded_file in enumerate(uploaded_presales_files):
+                        _progress(f"正在处理第 {idx + 1}/{len(uploaded_presales_files)} 个文件: {uploaded_file.name}")
+                        file_bytes = uploaded_file.getvalue()
+                        output_bytes, results = process_postsales_excel(
+                            file_bytes=file_bytes,
+                            annual_target=postsales_target,
+                            llm_call_fn=call_azure_openai,
+                            system_prompt=POSTSALES_PARSE_PROMPT,
+                            progress_callback=_progress,
+                        )
+
+                        # 生成文件名
+                        _acct = st.session_state.get("account_name", account_name) or ""
+                        _acct = _acct.strip() or uploaded_file.name.replace(".xlsx", "").replace("-Azure calculator", "")
+                        dl_name = f"{_acct}-售后-Azure calculator.xlsx"
+
+                        all_outputs.append((dl_name, output_bytes, results))
+
+                # 保存到 session_state
+                st.session_state["postsales_outputs"] = all_outputs
+
+                progress_area.empty()
+                st.rerun()
+
+            except Exception as e:
+                progress_area.empty()
+                st.error(f"处理失败：{e}")
+    else:
+        st.info("请先上传售前 Azure Calculator Excel 文件（支持多选）")
+
+    # 处理结果与下载
+    if "postsales_outputs" in st.session_state:
+        st.divider()
+        for file_idx, (dl_name, output_bytes, results) in enumerate(st.session_state["postsales_outputs"]):
+            st.markdown(f"#### 📄 {dl_name}")
+            for sheet_name, info in results.items():
+                if info["status"] == "success":
+                    st.success(
+                        f"**{sheet_name}**: 调整了 {info['adjusted_rows']}/{info['total_rows']} 行 | "
+                        f"原年消耗 ${info['old_annual']:,.0f} → 新年消耗 **${info['new_annual']:,.0f}** "
+                        f"(目标 ${info['target']:,.0f})"
+                    )
+                elif info["status"] == "skipped":
+                    st.warning(f"**{sheet_name}**: 已跳过 — {info['reason']}")
+                else:
+                    st.error(f"**{sheet_name}**: {info['reason']}")
+
+            st.download_button(
+                label=f"下载 {dl_name}",
+                data=output_bytes,
+                file_name=dl_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key=f"dl_postsales_{file_idx}",
+            )
+            if file_idx < len(st.session_state["postsales_outputs"]) - 1:
+                st.divider()

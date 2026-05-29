@@ -1,6 +1,6 @@
 """Session state persistence."""
 
-import hashlib
+import datetime
 import json
 import os
 import time
@@ -10,18 +10,26 @@ import streamlit as streamlit
 
 from config import PERSIST_DIR, _PERSIST_KEYS
 
+
+def _json_serializable(v: Any) -> Any:
+    """将不可直接 JSON 序列化的值转为可序列化形式。"""
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return {"__date__": v.isoformat()}
+    return v
+
+
+def _json_deserialize(v: Any) -> Any:
+    """还原 _json_serializable 转换的对象。"""
+    if isinstance(v, dict) and "__date__" in v:
+        try:
+            return datetime.date.fromisoformat(v["__date__"])
+        except (ValueError, TypeError):
+            return None
+    return v
+
 def _get_session_persist_path() -> str:
-    """返回当前 Streamlit session 对应的持久化文件路径（per-session 隔离）。"""
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-        ctx = get_script_run_ctx()
-        if ctx and ctx.session_id:
-            sid = hashlib.md5(ctx.session_id.encode()).hexdigest()[:8]
-        else:
-            sid = "default"
-    except Exception:
-        sid = "default"
-    return os.path.join(PERSIST_DIR, f".session_persist_{sid}.json")
+    """返回持久化文件路径（固定路径，确保刷新页面后仍可恢复登录态）。"""
+    return os.path.join(PERSIST_DIR, ".session_persist.json")
 
 
 def _cleanup_stale_sessions(max_age_hours: int = 24) -> None:
@@ -33,6 +41,14 @@ def _cleanup_stale_sessions(max_age_hours: int = 24) -> None:
                 fpath = os.path.join(PERSIST_DIR, fname)
                 if os.path.getmtime(fpath) < cutoff:
                     os.remove(fpath)
+        # 同时清理主持久化文件中的过期 token
+        path = _get_session_persist_path()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            expires_at = data.get("azure_token_expires_at", 0)
+            if expires_at and time.time() > expires_at:
+                os.remove(path)
     except Exception:
         pass
 
@@ -41,7 +57,7 @@ def persist_session_state() -> None:
     data: Dict[str, Any] = {}
     for k in _PERSIST_KEYS:
         if k in streamlit.session_state:
-            data[k] = streamlit.session_state[k]
+            data[k] = _json_serializable(streamlit.session_state[k])
     if not data:
         return
     try:
@@ -64,7 +80,7 @@ def restore_session_state() -> None:
         return
     for k, v in data.items():
         if k not in streamlit.session_state:
-            streamlit.session_state[k] = v
+            streamlit.session_state[k] = _json_deserialize(v)
 
 
 def clear_session_persist() -> None:
